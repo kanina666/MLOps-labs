@@ -34,3 +34,39 @@ web = [
 [tool.uv]
 default-groups = ["dev", "web"]
 
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = [".venv", "migrations", "__pycache__"]
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "F",     # pyflakes
+    "W",     # pycodestyle warnings
+    "I",     # isort (сортировка импортов)
+    "N",     # pep8-naming
+    "UP",    # pyupgrade (современный синтаксис)
+    "B",     # flake8-bugbear (частые баги)
+    "C4",    # flake8-comprehensions
+    "SIM",   # flake8-simplify
+    "ASYNC", # блокирующие вызовы внутри async-кода (важно для event loop)
+    "PT",    # flake8-pytest-style
+    "S",     # flake8-bandit (базовая безопасность)
+]
+ignore = [
+    "E501", # длина строки контролирует formatter
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"] # assert в тестах - норма
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+
