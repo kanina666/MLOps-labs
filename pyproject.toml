@@ -12,3 +12,25 @@ dependencies = []
 [build-system]
 requires = ["uv_build>=0.12.15,<0.13.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "mypy>=2.3.1",
+    "pre-commit>=4.6.2",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.16.7",
+]
+web = [
+    "asyncpg>=0.31.0",
+    "fastapi>=0.141.1",
+    "pydantic-settings>=2.15.0",
+    "sqlalchemy>=2.0.53",
+    "uvicorn[standard]>=0.53.0",
+]
+
+[tool.uv]
+default-groups = ["dev", "web"]
+
