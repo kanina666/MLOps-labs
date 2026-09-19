@@ -74,3 +74,10 @@ plugins = ["pydantic.mypy"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 
+[tool.coverage.run]
+source = ["src/mlops_labs"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
