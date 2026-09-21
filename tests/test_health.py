@@ -1,18 +1,19 @@
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import AsyncClient
 
-from mlops_labs.api.routers import health
 from mlops_labs.core.config import Settings, get_settings
-from mlops_labs.schemas import ComponentHealth
+from mlops_labs.db import base as db_base
+from mlops_labs.domain.system import DependencyHealth
+from mlops_labs.services import health
 
 
 def _fake_engine(*, pg_version: str = "16.1", error: Exception | None = None) -> MagicMock:
     @asynccontextmanager
-    async def connect():
+    async def connect() -> AsyncIterator[AsyncMock]:
         if error is not None:
             raise error
         conn = AsyncMock()
@@ -59,26 +60,26 @@ def test_version_fallback_when_package_not_installed() -> None:
 
 
 async def test_check_postgres_ok() -> None:
-    with patch.object(health, "engine", _fake_engine(pg_version="16.1")):
+    with patch.object(db_base, "engine", _fake_engine(pg_version="16.1")):
         result = await health._check_postgres()
-    assert result.status == "ok"
+    assert result.healthy is True
     assert result.version == "16.1"
     assert result.error is None
-    assert result.response_time_ms >= 0
+    assert result.latency_ms >= 0
 
 
 async def test_check_postgres_error_hides_details() -> None:
     secret_error = ConnectionRefusedError("postgresql://user:password@db:5432 refused")
-    with patch.object(health, "engine", _fake_engine(error=secret_error)):
+    with patch.object(db_base, "engine", _fake_engine(error=secret_error)):
         result = await health._check_postgres()
-    assert result.status == "error"
+    assert result.healthy is False
     assert result.version is None
     assert result.error == "postgres is unavailable"
     assert "password" not in (result.error or "")
 
 
 async def test_health_ok_when_db_available(async_client: AsyncClient) -> None:
-    fake = ComponentHealth(status="ok", response_time_ms=1.0, version="16.1")
+    fake = DependencyHealth(name="postgres", healthy=True, latency_ms=1.0, version="16.1")
     with patch.object(health, "_check_postgres", return_value=fake):
         response = await async_client.get("/api/v1/health")
     assert response.status_code == 200
@@ -88,7 +89,7 @@ async def test_health_ok_when_db_available(async_client: AsyncClient) -> None:
 
 
 async def test_health_503_when_db_unavailable(async_client: AsyncClient) -> None:
-    with patch.object(health, "engine", _fake_engine(error=ConnectionRefusedError("boom"))):
+    with patch.object(db_base, "engine", _fake_engine(error=ConnectionRefusedError("boom"))):
         response = await async_client.get("/api/v1/health")
     assert response.status_code == 503
     body = response.json()

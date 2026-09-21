@@ -1,4 +1,4 @@
-from functools import lru_cache
+from functools import cache
 from importlib.metadata import PackageNotFoundError, version
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -20,6 +20,6 @@ class Settings(BaseSettings):
             return "0.0.0-dev"
 
 
-@lru_cache
+@cache
 def get_settings() -> Settings:
     return Settings()
