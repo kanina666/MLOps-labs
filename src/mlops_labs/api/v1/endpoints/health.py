@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Response, status
 
+from mlops_labs.api.schemas import HealthResponse, VersionResponse
 from mlops_labs.api.v1.mappers import to_health_response_dto
 from mlops_labs.core.config import get_settings
-from mlops_labs.schemas import HealthResponse, VersionResponse
 from mlops_labs.services.health import check_system
 
 router = APIRouter()

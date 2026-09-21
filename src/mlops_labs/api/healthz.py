@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from mlops_labs.schemas import HealthzResponse
+from mlops_labs.api.schemas import HealthzResponse
 
 router = APIRouter(tags=["infra"])
 

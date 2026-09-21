@@ -1,5 +1,5 @@
+from mlops_labs.api.schemas import ComponentHealth, HealthResponse
 from mlops_labs.domain.system import SystemHealth
-from mlops_labs.schemas import ComponentHealth, HealthResponse
 
 
 def to_health_response_dto(system_health: SystemHealth) -> HealthResponse:
