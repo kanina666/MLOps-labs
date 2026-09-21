@@ -1,4 +1,7 @@
 from dataclasses import dataclass
+from typing import Protocol
+
+from typing_extensions import runtime_checkable
 
 
 @dataclass(frozen=True, slots=True)
@@ -14,3 +17,8 @@ class DependencyHealth:
 class SystemHealth:
     healthy: bool
     checks: tuple[DependencyHealth, ...]
+
+
+@runtime_checkable
+class HealthCheck(Protocol):
+    async def check(self) -> DependencyHealth: ...
