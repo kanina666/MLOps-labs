@@ -1,0 +1,54 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: mlops_labs
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d mlops_labs"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+    #logging here lolz
+    networks:
+      - mlopslabs_network
+    restart: unless-stopped
+  
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mlops_labs_app
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    #logging here lolz
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz').read()\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    #no .env file yet, so we set environment variables directly in the docker-compose.yaml
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://postgres:postgres@postgres:5432/mlops_labs"
+      #logging level here damn
+    networks:
+      - mlopslabs_network
+    restart: unless-stopped
+    
+volumes:
+  postgres_data:
+
+networks:
+  mlopslabs_network:
+    driver: bridge
