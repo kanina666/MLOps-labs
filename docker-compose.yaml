@@ -20,7 +20,7 @@ services:
     networks:
       - mlopslabs_network
     restart: unless-stopped
-  
+
   app:
     build:
       context: .
@@ -45,7 +45,7 @@ services:
     networks:
       - mlopslabs_network
     restart: unless-stopped
-    
+
 volumes:
   postgres_data:
 
