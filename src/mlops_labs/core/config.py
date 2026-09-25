@@ -1,5 +1,6 @@
 from functools import cache
 from importlib.metadata import PackageNotFoundError, version
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -14,6 +15,7 @@ class Settings(BaseSettings):
     pool_recycle: int = 1800
 
     app_version_override: str | None = None
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
     @property
     def app_version(self) -> str:

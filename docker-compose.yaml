@@ -16,7 +16,11 @@ services:
       timeout: 3s
       retries: 5
       start_period: 3s
-    #logging here lolz
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - mlopslabs_network
     restart: unless-stopped
@@ -36,7 +40,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    #logging here lolz
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz').read()\" || exit 1"]
       interval: 30s
@@ -46,7 +54,7 @@ services:
     #no .env file yet, so we set environment variables directly in the docker-compose.yaml
     environment:
       DATABASE_URL: "postgresql+asyncpg://postgres:postgres@postgres:5432/mlops_labs"
-      #logging level here damn
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
     networks:
       - mlopslabs_network
     restart: unless-stopped

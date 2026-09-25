@@ -1,6 +1,9 @@
 import asyncio
+import logging
 
 from mlops_labs.domain.system import DependencyHealth, HealthCheck, SystemHealth
+
+logger = logging.getLogger(__name__)
 
 
 class SystemHealthCheck:
@@ -26,9 +29,14 @@ class SystemHealthCheck:
         try:
             return await check.check()
         except Exception as exc:
+            name = getattr(check, "name", check.__class__.__name__)
+            logger.error(
+                "dependency.check_failed",
+                extra={"dependency": name, "error_type": type(exc).__name__},
+            )
             return DependencyHealth(
-                name=getattr(check, "name", check.__class__.__name__),
+                name=name,
                 healthy=False,
                 latency_ms=0.0,
-                error=f"Check execution failed: {exc}",
+                error="dependency check failed",
             )

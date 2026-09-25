@@ -81,7 +81,7 @@ async def test_postgres_health_check_ok() -> None:
     assert result.latency_ms >= 0
 
 
-async def test_postgres_health_check_error_hides_details() -> None:
+async def test_postgres_health_check_error_hides_details(caplog: pytest.LogCaptureFixture) -> None:
     secret_error = ConnectionRefusedError("postgresql://user:secret_password@db:5432 refused")
     engine = _fake_engine(error=secret_error)
     probe = PostgresHealthCheck(engine=engine)
@@ -93,6 +93,10 @@ async def test_postgres_health_check_error_hides_details() -> None:
     assert result.version is None
     assert result.error == "postgres is unavailable"
     assert "secret_password" not in (result.error or "")
+    assert "secret_password" not in caplog.text
+    records = [r for r in caplog.records if r.getMessage() == "dependency.unavailable"]
+    assert len(records) == 1
+    assert records[0].error_type == "ConnectionRefusedError"
 
 
 async def test_system_health_check_aggregates_all_healthy() -> None:
@@ -140,7 +144,9 @@ async def test_system_health_check_empty_checks() -> None:
     assert system_health.checks == ()
 
 
-async def test_system_health_check_safe_check_isolates_unhandled_exception() -> None:
+async def test_system_health_check_safe_check_isolates_unhandled_exception(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     class BuggyProbe:
         name = "buggy"
 
@@ -157,7 +163,11 @@ async def test_system_health_check_safe_check_isolates_unhandled_exception() -> 
     assert system_health.healthy is False
     checks_by_name = {c.name: c for c in system_health.checks}
     assert checks_by_name["buggy"].healthy is False
-    assert "unexpected probe failure" in (checks_by_name["buggy"].error or "")
+    assert checks_by_name["buggy"].error == "dependency check failed"
+    assert "unexpected probe failure" not in caplog.text
+    records = [r for r in caplog.records if r.getMessage() == "dependency.check_failed"]
+    assert len(records) == 1
+    assert records[0].error_type == "RuntimeError"
     assert checks_by_name["working"].healthy is True
 
 

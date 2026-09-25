@@ -1,9 +1,12 @@
+import logging
 import time
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from mlops_labs.db.base import ping_postgres
 from mlops_labs.domain.system import DependencyHealth
+
+logger = logging.getLogger(__name__)
 
 
 def _elapsed_ms(start: float) -> float:
@@ -18,7 +21,11 @@ class PostgresHealthCheck:
         start = time.perf_counter()
         try:
             version = await ping_postgres(self.engine)
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "dependency.unavailable",
+                extra={"dependency": "postgres", "error_type": type(exc).__name__},
+            )
             return DependencyHealth(
                 name="postgres",
                 healthy=False,
