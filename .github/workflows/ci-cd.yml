@@ -1,4 +1,4 @@
-name: CI
+name: CI and CD
 
 on:
   push:
@@ -25,11 +25,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
 
-      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
         with:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ env.PYTHON_VERSION }}
@@ -62,7 +62,7 @@ jobs:
 
       - name: Save test reports
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: test-reports
           path: |
@@ -70,3 +70,96 @@ jobs:
             test-results.xml
           if-no-files-found: warn
           retention-days: 14
+
+  container:
+    name: Build, smoke test and publish
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    env:
+      COMPOSE_PROJECT_NAME: mlops-ci
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Calculate and validate image version
+        id: image
+        run: uv run --no-project --python 3.12 python scripts/image_metadata.py
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+
+      - name: Build once and load for testing
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          load: true
+          push: false
+          tags: ${{ steps.image.outputs.tags }}
+          build-args: |
+            APP_VERSION=${{ steps.image.outputs.app_version }}
+            VCS_REF=${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Start the built image with PostgreSQL
+        env:
+          APP_IMAGE: ${{ steps.image.outputs.primary_tag }}
+        run: docker compose up --no-build --detach --wait --wait-timeout 120
+
+      - name: Verify endpoints and embedded version
+        env:
+          EXPECTED_VERSION: ${{ steps.image.outputs.app_version }}
+        run: uv run --no-project --python 3.12 python scripts/smoke_test.py
+
+      - name: Verify graceful degradation
+        env:
+          EXPECTED_VERSION: ${{ steps.image.outputs.app_version }}
+        run: |
+          docker compose stop postgres
+          uv run --no-project --python 3.12 python scripts/smoke_test.py --degraded
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish the image that passed smoke tests
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+        env:
+          IMAGE_TAGS: ${{ steps.image.outputs.tags }}
+        shell: bash
+        run: |
+          while IFS= read -r tag; do
+            docker push "$tag"
+            printf 'Published `%s`\n\n' "$tag" >> "$GITHUB_STEP_SUMMARY"
+          done <<< "$IMAGE_TAGS"
+
+      - name: Collect container logs
+        if: always()
+        run: docker compose logs --no-color > container-logs.txt
+
+      - name: Save container logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: container-logs
+          path: container-logs.txt
+          retention-days: 7
+
+      - name: Stop the temporary CI stack
+        if: always()
+        run: docker compose down --volumes --remove-orphans

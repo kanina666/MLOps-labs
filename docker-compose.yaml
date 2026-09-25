@@ -22,9 +22,14 @@ services:
     restart: unless-stopped
 
   app:
+    image: ${APP_IMAGE:-mlops-labs:local}
+    pull_policy: never
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        APP_VERSION: ${APP_VERSION:-}
+        VCS_REF: ${VCS_REF:-local}
     container_name: mlops_labs_app
     ports:
       - "8000:8000"
