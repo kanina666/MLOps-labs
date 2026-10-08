@@ -42,7 +42,7 @@ exclude = [".venv", "migrations", "__pycache__"]
 [tool.ruff.lint]
 select = [
     "E",     # pycodestyle errors
-    "F",     # pyflakes
+    "F",     # неиспользуемые импорты
     "W",     # pycodestyle warnings
     "I",     # isort (сортировка импортов)
     "N",     # pep8-naming
