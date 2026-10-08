@@ -28,12 +28,6 @@ LABEL org.opencontainers.image.title="mlops-labs" \
 RUN groupadd --system appuser && useradd --system -g appuser appuser \
     && chown -R appuser:appuser /app
 
-RUN pip install --no-cache-dir \
-      mlflow==${MLFLOW_VERSION} \
-      "sqlalchemy>=2.0.38,<2.1" \
-      psycopg2-binary==2.9.10 \
-      boto3==1.35.99
-
 USER appuser
 
 EXPOSE 8000
