@@ -112,6 +112,9 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Build the MLflow server image
+        run: docker compose build mlflow
+
       - name: Start the built image with PostgreSQL
         env:
           APP_IMAGE: ${{ steps.image.outputs.primary_tag }}

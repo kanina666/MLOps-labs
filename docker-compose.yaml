@@ -129,10 +129,10 @@ services:
       minio:
         condition: service_started
     entrypoint: >
-      /bin/sh -c "                                                                                                                                             
-      for i in $$(seq 1 30); do                                                                                                                                
-        aws --endpoint-url http://minio:9000 s3 mb s3://${MLFLOW_BUCKET:-mlflow} && exit 0;                                                                    
-        sleep 2;                                                                                                                                               
+      /bin/sh -c "
+      for i in $$(seq 1 30); do
+        aws --endpoint-url http://minio:9000 s3 mb s3://${MLFLOW_BUCKET:-mlflow} && exit 0;
+        sleep 2;
       done; exit 1"
     environment:
       AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
