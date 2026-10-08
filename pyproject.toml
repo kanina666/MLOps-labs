@@ -29,6 +29,9 @@ web = [
     "pydantic-settings>=2.15.0",
     "sqlalchemy>=2.0.53",
     "uvicorn[standard]>=0.53.0",
+    "mlflow==2.22.0",
+    "scikit-learn>=1.6.1",
+    "numpy>=2.2.0"
 ]
 
 [tool.uv]
@@ -42,7 +45,7 @@ exclude = [".venv", "migrations", "__pycache__"]
 [tool.ruff.lint]
 select = [
     "E",     # pycodestyle errors
-    "F",     # pyflakes
+    "F",     # неиспользуемые импорты
     "W",     # pycodestyle warnings
     "I",     # isort (сортировка импортов)
     "N",     # pep8-naming
