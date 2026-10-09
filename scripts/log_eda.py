@@ -1,5 +1,3 @@
-"""Upload a completed EDA snapshot to the repository's HTTP MLflow server."""
-
 import argparse
 import csv
 import hashlib
@@ -69,6 +67,7 @@ def log_eda(
             raise FileNotFoundError(report)
     try:
         client_version = importlib.metadata.version("mlflow-skinny")
+        from mlflow.entities import Dataset, DatasetInput, InputTag
         from mlflow.tracking import MlflowClient
 
         import mlflow
@@ -91,6 +90,18 @@ def log_eda(
         encoding="utf-8-sig", newline=""
     ) as stream:
         rows = list(csv.DictReader(stream))
+    manifest = json.loads((artifact_dir / "data_manifest.json").read_text(encoding="utf-8"))
+    dataset_inputs = []
+    for record in manifest["files"]:
+        dataset = Dataset(
+            name=f"m5_{Path(record['filename']).stem}",
+            digest=record["sha256"][:32],
+            source_type="http",
+            source=json.dumps({"url": record["source_url"]}),
+        )
+        dataset_inputs.append(
+            DatasetInput(dataset, tags=[InputTag("mlflow.data.context", "source")])
+        )
     mlflow.set_tracking_uri(uri)
     client = MlflowClient(tracking_uri=uri)
     experiment = mlflow.set_experiment(EXPERIMENT)
@@ -100,6 +111,7 @@ def log_eda(
         )
     with mlflow.start_run(run_name="EDA_full_panel") as parent:
         parent_id = parent.info.run_id
+        client.log_inputs(parent_id, datasets=dataset_inputs)
         mlflow.set_tags(
             {
                 "task": "Homework point 2: EDA",
@@ -107,7 +119,6 @@ def log_eda(
                 "scope": "all 30490 bottom-level series",
                 "storage": "repository_compose",
                 "source_type": "pinned public mirror",
-                "causal_interpretation": "not claimed",
             }
         )
         mlflow.log_params({**config, "mlflow_client_version": client_version})
@@ -121,6 +132,7 @@ def log_eda(
             model_rows = [row for row in rows if row["model"] == model]
             with mlflow.start_run(run_name=f"EDA_check_{model}", nested=True) as child:
                 child_ids.append(child.info.run_id)
+                client.log_inputs(child.info.run_id, datasets=dataset_inputs)
                 mlflow.log_params({"rule": model, "horizon": config["horizon_days"]})
                 for row in model_rows:
                     mlflow.log_metrics(
@@ -136,6 +148,19 @@ def log_eda(
                 )
         for report in reports:
             mlflow.log_artifact(str(report), artifact_path="report")
+            if report.suffix.lower() == ".ipynb":
+                from nbconvert import HTMLExporter
+
+                notebook = json.loads(report.read_text(encoding="utf-8"))
+                if not any(cell.get("outputs") for cell in notebook["cells"]):
+                    print(
+                        f"{report.name}: no saved outputs. Run and save the notebook in Jupyter "
+                        "to include results and charts in the HTML preview."
+                    )
+                exporter = HTMLExporter(template_name="classic", embed_images=True)
+                html, _ = exporter.from_filename(str(report))
+                html_name = report.with_suffix(".html").name
+                mlflow.log_text(html, f"report/{html_name}")
         for folder in ["figures", "tables"]:
             expected_count = sum(Path(name).parts[0] == folder for name in snapshot["files"])
             if len(client.list_artifacts(parent_id, f"eda/{folder}")) != expected_count:
@@ -158,13 +183,13 @@ def log_eda(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser()
     parser.add_argument("--tracking-uri", default=None)
     parser.add_argument(
         "--report",
         action="append",
         type=Path,
-        help="Report to attach; defaults to the saved notebooks/M5_EDA_MLOps.ipynb",
+        help="Report file; notebooks are also exported as HTML.",
     )
     args = parser.parse_args()
     reports = args.report or [ROOT / "notebooks" / "M5_EDA_MLOps.ipynb"]
