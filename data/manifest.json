@@ -1,0 +1,27 @@
+{
+  "dataset": "M5 Forecasting - Accuracy",
+  "canonical_source": "https://www.kaggle.com/competitions/m5-forecasting-accuracy/data",
+  "download_source": "Public GitHub mirror; not downloaded from an authenticated Kaggle session",
+  "mirror_commit": "112ab0406cab5d9007ebb8c6d810705f098f6998",
+  "retrieved_at_utc": "2026-10-08T22:38:11.490652+00:00",
+  "files": [
+    {
+      "filename": "calendar.csv",
+      "source_url": "https://raw.githubusercontent.com/claudiawang-tech/M5-Forecasting---Accuracy/112ab0406cab5d9007ebb8c6d810705f098f6998/calendar.csv",
+      "bytes": 103469,
+      "sha256": "d12b5914ef03e66649adf5dd9e996e6602251c22b7a6af8f1f7e3aa12f8860f5"
+    },
+    {
+      "filename": "sales_train_validation.csv",
+      "source_url": "https://raw.githubusercontent.com/claudiawang-tech/M5-Forecasting---Accuracy/112ab0406cab5d9007ebb8c6d810705f098f6998/sales_train_validation.csv.zip",
+      "bytes": 120007726,
+      "sha256": "f368e66ed1dbecb48b2cc8fc589bf68b3deddbbb36bf5c88b4d6d0a09b9b6724"
+    },
+    {
+      "filename": "sell_prices.csv",
+      "source_url": "https://raw.githubusercontent.com/claudiawang-tech/M5-Forecasting---Accuracy/112ab0406cab5d9007ebb8c6d810705f098f6998/sell_prices.csv.zip",
+      "bytes": 203395785,
+      "sha256": "9da3ad1f8b8ccacdbdc70612191dd375ec24a4ac6625c24b75b3bc60b0bed2ef"
+    }
+  ]
+}

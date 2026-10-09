@@ -37,3 +37,13 @@ Thumbs.db
 *.log
 
 .idea
+
+# EDA source is in notebooks/; generated data/reports stay local or in MLflow.
+.venv-eda/
+.jupyter/
+.ipython/
+.matplotlib/
+.ipynb_checkpoints/
+data/raw/
+artifacts/
+reports/
