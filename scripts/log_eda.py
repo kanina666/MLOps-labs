@@ -28,7 +28,7 @@ def validate_snapshot(artifact_dir: Path) -> dict:
     manifest_path = artifact_dir / "analysis_manifest.json"
     if not manifest_path.is_file():
         raise ValueError(
-            "No completed EDA snapshot. Run: uv run --group eda python scripts/run_eda.py"
+            "No completed EDA snapshot. Run all cells in notebooks/M5_EDA_MLOps.ipynb and save it."
         )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     files = manifest.get("files", {})
@@ -164,11 +164,11 @@ def main() -> None:
         "--report",
         action="append",
         type=Path,
-        default=[],
-        help="Attach an executed report; repeat for notebook and HTML",
+        help="Report to attach; defaults to the saved notebooks/M5_EDA_MLOps.ipynb",
     )
     args = parser.parse_args()
-    log_eda(tracking_uri=args.tracking_uri, reports=tuple(args.report))
+    reports = args.report or [ROOT / "notebooks" / "M5_EDA_MLOps.ipynb"]
+    log_eda(tracking_uri=args.tracking_uri, reports=tuple(reports))
 
 
 main()
