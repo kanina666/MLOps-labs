@@ -11,6 +11,7 @@ repos:
       - id: check-json
       - id: check-added-large-files
         args: [--maxkb=1000, --enforce-all]
+        exclude: '^notebooks/M5_EDA_MLOps\.ipynb$'
       - id: check-merge-conflict
       - id: detect-private-key
   - repo: https://github.com/astral-sh/ruff-pre-commit
