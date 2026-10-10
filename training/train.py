@@ -3,20 +3,24 @@ import os
 import tempfile
 from pathlib import Path
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.figure import Figure
 from mlflow.entities import Dataset, DatasetInput, InputTag
 from mlflow.models import infer_signature
-from sklearn.ensemble import HistGradientBoostingRegressor
+from sklearn.ensemble import HistGradientBoostingRegressor, RandomForestRegressor
 from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 
 import mlflow
 from mlflow import MlflowClient
 
 ROOT = Path(__file__).resolve().parents[1]
-DATA_RAW = ROOT / "data" / "raw"
+DATA_RAW = Path(os.getenv("M5_DATA_DIR", ROOT / "data" / "raw"))
+if "M5_DATA_DIR" not in os.environ and not DATA_RAW.exists():
+    DATA_RAW = ROOT.parent / "data" / "raw"
 EXPERIMENT = "m5-forecasting"
 TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://127.0.0.1:5000")
 
@@ -30,8 +34,8 @@ def load_raw_series() -> tuple[np.ndarray, pd.DataFrame]:
             "Raw M5 dataset files not found. Run 'uv run python scripts/download_m5.py' first."
         )
 
-    calendar = pd.read_csv(calendar_path).iloc[:1913]
     day_cols = [f"d_{i}" for i in range(1, 1914)]
+    calendar = pd.read_csv(calendar_path).set_index("d").loc[day_cols].reset_index()
 
     chunks = [
         chunk[chunk["store_id"] == "CA_1"][day_cols]
@@ -46,6 +50,7 @@ def build_dataset(
 ) -> tuple[pd.DataFrame, np.ndarray]:
     rows = []
     targets = []
+    weekdays = pd.to_datetime(calendar["date"]).dt.dayofweek.to_numpy()
     for t in range(history_len, len(sales)):
         hist = sales[t - history_len : t]
         rows.append(
@@ -55,7 +60,7 @@ def build_dataset(
                 "lag_14": float(hist[-14]),
                 "lag_28": float(hist[-28]),
                 "rolling_mean_7": float(np.mean(hist[-7:])),
-                "day_of_week": int(calendar.iloc[t]["wday"]) % 7,
+                "day_of_week": int(weekdays[t]),
                 "is_snap": int(calendar.iloc[t]["snap_CA"]),
             }
         )
@@ -74,17 +79,17 @@ def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
 def save_prediction_plot(
     y_true: np.ndarray, y_pred: np.ndarray, title: str, output_path: Path
 ) -> None:
-    fig, ax = plt.subplots(figsize=(10, 4))
+    fig = Figure(figsize=(10, 4))
+    ax = fig.subplots()
     ax.plot(y_true, label="Actual Sales", color="black", linewidth=1.5)
     ax.plot(y_pred, label="Predicted", color="tab:blue", linestyle="--", linewidth=1.5)
     ax.set_title(title)
-    ax.set_xlabel("Day in Test Horizon (28 days)")
+    ax.set_xlabel("Day in validation window (one-step predictions)")
     ax.set_ylabel("Total Units Sold")
     ax.legend()
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     fig.savefig(output_path, dpi=130)
-    plt.close(fig)
 
 
 def train() -> None:
@@ -92,7 +97,7 @@ def train() -> None:
     mlflow.set_experiment(EXPERIMENT)
     client = MlflowClient()
 
-    print("[1/5] Loading data for store CA_1 and building features...")
+    print("Loading data for store CA_1 and building features...")
     sales, calendar = load_raw_series()
     df_all, y_all = build_dataset(sales, calendar)
 
@@ -115,36 +120,45 @@ def train() -> None:
                     name=f"m5_{Path(f['filename']).stem}",
                     digest=f["sha256"][:32],
                     source_type="http",
-                    source=f["source_url"],
+                    source=json.dumps({"url": f["source_url"]}),
                 ),
-                tags=[InputTag("mlflow.data.context", "training")],
+                tags=[InputTag("mlflow.data.context", "source")],
             )
             for f in manifest["files"]
+            if f["filename"] in {"sales_train_validation.csv", "calendar.csv"}
         ]
 
     runs_info = {}
+    common_tags = {"store_id": "CA_1", "validation_mode": "rolling_one_step"}
 
-    # Run 1: Baseline Ridge on basic lags
-    base_features = ["lag_1", "lag_7", "day_of_week", "is_snap"]
-    print("[2/5] Training Run 1: baseline_ridge...")
-    model_ridge = Ridge(alpha=1.0)
+    sig_full = infer_signature(df_train.head(2), y_train[:2])
+    print("Training baseline_ridge...")
+    model_ridge = make_pipeline(StandardScaler(), Ridge(alpha=1.0))
     with mlflow.start_run(run_name="baseline_ridge") as run1:
         if datasets:
             client.log_inputs(run1.info.run_id, datasets=datasets)
-        model_ridge.fit(df_train[base_features], y_train)
-        pred_ridge = model_ridge.predict(df_test[base_features])
+        model_ridge.fit(df_train, y_train)
+        pred_ridge = model_ridge.predict(df_test)
         metrics_ridge = compute_metrics(y_test, pred_ridge)
 
-        sig_ridge = infer_signature(df_train[base_features].head(2), y_train[:2])
-        mlflow.set_tags({"model_family": "linear", "stage": "baseline"})
-        mlflow.log_params({"model_type": "Ridge", "alpha": 1.0, "features": str(base_features)})
+        mlflow.set_tags({**common_tags, "model_family": "linear", "stage": "baseline"})
+        mlflow.log_params(
+            {
+                "model_type": "Ridge",
+                "alpha": 1.0,
+                "features_count": len(df_train.columns),
+                "preprocessing": "StandardScaler",
+            }
+        )
         mlflow.log_metrics(metrics_ridge)
-        mlflow.sklearn.log_model(model_ridge, artifact_path="model", signature=sig_ridge)
+        mlflow.sklearn.log_model(model_ridge, artifact_path="model", signature=sig_full)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            plot_file = Path(tmp_dir) / "forecast_vs_actual.png"
+            save_prediction_plot(y_test, pred_ridge, "Ridge vs Actual", plot_file)
+            mlflow.log_artifact(str(plot_file), artifact_path="plots")
         runs_info["baseline_ridge"] = (run1.info.run_id, metrics_ridge["WAPE"])
 
-    # Run 2: HistGradientBoosting default on all 7 features
-    sig_full = infer_signature(df_train.head(2), y_train[:2])
-    print("[3/5] Training Run 2: hgb_default...")
+    print("Training hgb_default...")
     model_hgb_def = HistGradientBoostingRegressor(random_state=42)
     with mlflow.start_run(run_name="hgb_default") as run2:
         if datasets:
@@ -153,13 +167,14 @@ def train() -> None:
         pred_hgb_def = model_hgb_def.predict(df_test)
         metrics_hgb_def = compute_metrics(y_test, pred_hgb_def)
 
-        mlflow.set_tags({"model_family": "gradient_boosting", "stage": "model_v1"})
+        mlflow.set_tags({**common_tags, "model_family": "gradient_boosting", "stage": "model_v1"})
         mlflow.log_params(
             {
                 "model_type": "HistGradientBoostingRegressor",
                 "features_count": len(df_train.columns),
                 "learning_rate": 0.1,
                 "max_iter": 100,
+                "random_state": 42,
             }
         )
         mlflow.log_metrics(metrics_hgb_def)
@@ -172,8 +187,7 @@ def train() -> None:
 
         runs_info["hgb_default"] = (run2.info.run_id, metrics_hgb_def["WAPE"])
 
-    # Run 3: HistGradientBoosting tuned on all 7 features
-    print("[4/5] Training Run 3: hgb_tuned...")
+    print("Training hgb_tuned...")
     model_hgb_tuned = HistGradientBoostingRegressor(
         learning_rate=0.03,
         max_iter=150,
@@ -188,7 +202,7 @@ def train() -> None:
         pred_hgb_tuned = model_hgb_tuned.predict(df_test)
         metrics_hgb_tuned = compute_metrics(y_test, pred_hgb_tuned)
 
-        mlflow.set_tags({"model_family": "gradient_boosting", "stage": "model_v2"})
+        mlflow.set_tags({**common_tags, "model_family": "gradient_boosting", "stage": "model_v2"})
         mlflow.log_params(
             {
                 "model_type": "HistGradientBoostingRegressor",
@@ -197,6 +211,7 @@ def train() -> None:
                 "max_iter": 150,
                 "min_samples_leaf": 15,
                 "l2_regularization": 1.0,
+                "random_state": 42,
             }
         )
         mlflow.log_metrics(metrics_hgb_tuned)
@@ -209,36 +224,57 @@ def train() -> None:
 
         runs_info["hgb_tuned"] = (run3.info.run_id, metrics_hgb_tuned["WAPE"])
 
+    print("Training random_forest...")
+    model_rf = RandomForestRegressor(n_estimators=100, random_state=42)
+    with mlflow.start_run(run_name="random_forest") as run4:
+        if datasets:
+            client.log_inputs(run4.info.run_id, datasets=datasets)
+        model_rf.fit(df_train, y_train)
+        pred_rf = model_rf.predict(df_test)
+        metrics_rf = compute_metrics(y_test, pred_rf)
+
+        mlflow.set_tags({**common_tags, "model_family": "random_forest", "stage": "candidate"})
+        mlflow.log_params(
+            {
+                "model_type": "RandomForestRegressor",
+                "features_count": len(df_train.columns),
+                "n_estimators": 100,
+                "max_depth": None,
+                "min_samples_leaf": 1,
+                "random_state": 42,
+            }
+        )
+        mlflow.log_metrics(metrics_rf)
+        mlflow.sklearn.log_model(model_rf, artifact_path="model", signature=sig_full)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            plot_file = Path(tmp_dir) / "forecast_vs_actual.png"
+            save_prediction_plot(y_test, pred_rf, "Random Forest vs Actual", plot_file)
+            mlflow.log_artifact(str(plot_file), artifact_path="plots")
+
+        runs_info["random_forest"] = (run4.info.run_id, metrics_rf["WAPE"])
+
     # Register in Model Registry
-    print("[5/5] Registering models in Model Registry...")
+    print("Registering models in Model Registry...")
     model_name = "m5_sales_model"
 
-    v1_run_id = runs_info["hgb_default"][0]
-    reg_v1 = mlflow.register_model(f"runs:/{v1_run_id}/model", model_name)
-    client.update_model_version(
-        name=model_name,
-        version=reg_v1.version,
-        description="HistGradientBoosting (default) trained on M5 CA_1 daily sales with 7 lag features.",
-    )
-    client.set_model_version_tag(model_name, reg_v1.version, "dataset", "m5_ca1_daily_sales")
+    versions = {}
+    for run_name, (run_id, wape) in runs_info.items():
+        registered = mlflow.register_model(f"runs:/{run_id}/model", model_name)
+        versions[run_name] = registered.version
+        client.update_model_version(
+            name=model_name,
+            version=registered.version,
+            description=f"{run_name}: next-day total sales for M5 store CA_1.",
+        )
+        client.set_model_version_tag(
+            model_name, registered.version, "dataset", "m5_ca1_daily_sales"
+        )
+        print(f"  - Version {registered.version} from {run_name} (WAPE: {wape:.4f})")
 
-    v2_run_id = runs_info["hgb_tuned"][0]
-    reg_v2 = mlflow.register_model(f"runs:/{v2_run_id}/model", model_name)
-    client.update_model_version(
-        name=model_name,
-        version=reg_v2.version,
-        description="HistGradientBoosting (tuned) trained on M5 CA_1 daily sales with 7 lag features and SNAP calendar events.",
-    )
-    client.set_model_version_tag(model_name, reg_v2.version, "dataset", "m5_ca1_daily_sales")
-
-    client.set_registered_model_alias(model_name, "champion", reg_v2.version)
-
-    print(f"\nModel '{model_name}' successfully registered:")
-    print(
-        f"  - Version {reg_v1.version} from hgb_default (WAPE: {runs_info['hgb_default'][1]:.4f})"
-    )
-    print(f"  - Version {reg_v2.version} from hgb_tuned (WAPE: {runs_info['hgb_tuned'][1]:.4f})")
-    print(f"  - Alias @champion -> Version {reg_v2.version}")
+    best_run = min(runs_info, key=lambda name: runs_info[name][1])
+    client.set_registered_model_alias(model_name, "champion", versions[best_run])
+    print(f"  - Alias @champion -> Version {versions[best_run]} ({best_run})")
     print(f"\nAll runs completed. Open MLflow UI: {TRACKING_URI}/#/experiments")
 
 

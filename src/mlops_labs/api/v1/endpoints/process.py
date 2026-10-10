@@ -2,6 +2,7 @@ from typing import Annotated, Any
 
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, status
+from starlette.concurrency import run_in_threadpool
 
 from mlops_labs.api.dependencies import extract_features, get_model
 from mlops_labs.api.schemas import ProcessResponse
@@ -15,7 +16,7 @@ async def process(
     model: Annotated[Any, Depends(get_model)],
 ) -> ProcessResponse:
     try:
-        prediction = model.predict(features_df)
+        prediction = await run_in_threadpool(model.predict, features_df)
         pred_value = float(prediction[0])
     except Exception as exc:
         raise HTTPException(
