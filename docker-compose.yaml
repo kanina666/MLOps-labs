@@ -71,6 +71,7 @@ services:
     environment:
       DATABASE_URL: "postgresql+asyncpg://postgres:postgres@postgres:5432/mlops_labs"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
     networks:
       - mlopslabs_network
     restart: unless-stopped

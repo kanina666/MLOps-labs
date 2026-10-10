@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     app_version_override: str | None = None
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
+    mlflow_tracking_uri: str = "http://localhost:5000"
+    model_uri: str = "models:/m5_sales_model@champion"
+
     @property
     def app_version(self) -> str:
         if self.app_version_override:

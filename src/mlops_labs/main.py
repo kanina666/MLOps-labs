@@ -3,6 +3,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from time import perf_counter
 
+import mlflow.pyfunc
 from fastapi import FastAPI, Request, Response
 
 from mlops_labs.api import router as api_router
@@ -21,6 +22,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     engine = create_db_engine(settings)
     app.state.settings = settings
     app.state.engine = engine
+
+    mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
+    try:
+        app.state.model = mlflow.pyfunc.load_model(settings.model_uri)
+        logger.info("model.loaded", extra={"model_uri": settings.model_uri})
+    except Exception as exc:
+        logger.warning(
+            "model.load_failed",
+            extra={"error": str(exc), "model_uri": settings.model_uri},
+        )
+        app.state.model = None
 
     try:
         logger.info("app.started", extra={"version": settings.app_version})
