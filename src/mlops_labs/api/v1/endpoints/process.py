@@ -1,7 +1,7 @@
 from typing import Annotated, Any
 
 import pandas as pd
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from starlette.concurrency import run_in_threadpool
 
 from mlops_labs.api.dependencies import extract_features, get_model
@@ -12,6 +12,7 @@ router = APIRouter()
 
 @router.post("/process", response_model=ProcessResponse, status_code=status.HTTP_200_OK)
 async def process(
+    request: Request,
     features_df: Annotated[pd.DataFrame, Depends(extract_features)],
     model: Annotated[Any, Depends(get_model)],
 ) -> ProcessResponse:
@@ -24,4 +25,9 @@ async def process(
             detail=f"Inference error: {exc}",
         ) from exc
 
-    return ProcessResponse(prediction=round(pred_value, 4))
+    model_info = getattr(request.app.state, "model_info", None) or {}
+    return ProcessResponse(
+        prediction=round(pred_value, 4),
+        model_version=model_info.get("model_version"),
+        run_id=model_info.get("run_id"),
+    )

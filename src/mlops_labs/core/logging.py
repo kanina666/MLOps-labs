@@ -22,7 +22,11 @@ class JsonFormatter(logging.Formatter):
             "duration_ms",
             "dependency",
             "error_type",
+            "error_code",
             "version",
+            "model_uri",
+            "model_version",
+            "run_id",
         ):
             if hasattr(record, field):
                 payload[field] = getattr(record, field)

@@ -28,7 +28,7 @@ def log_eda() -> None:
                 name=f"m5_{Path(f['filename']).stem}",
                 digest=f["sha256"][:32],
                 source_type="http",
-                source=f["source_url"],
+                source=json.dumps({"url": f["source_url"]}),
             ),
             tags=[InputTag("mlflow.data.context", "raw_data")],
         )
@@ -38,6 +38,8 @@ def log_eda() -> None:
     with mlflow.start_run(run_name="EDA_full_panel") as run:
         client.log_inputs(run.info.run_id, datasets=datasets)
         mlflow.set_tags({"stage": "EDA", "dataset": "M5 Forecasting", "scope": "30490 series"})
+        for metadata_file in sorted(EDA_DIR.glob("*.json")):
+            mlflow.log_artifact(str(metadata_file), artifact_path="eda")
 
         if (EDA_DIR / "analysis_config.json").exists():
             config = json.loads((EDA_DIR / "analysis_config.json").read_text(encoding="utf-8"))

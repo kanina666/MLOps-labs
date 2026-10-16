@@ -38,7 +38,11 @@ async def test_process_success(async_client: AsyncClient) -> None:
     response = await async_client.post("/api/v1/process", json=payload)
 
     assert response.status_code == 200
-    assert response.json() == {"prediction": 123.4567}
+    assert response.json() == {
+        "prediction": 123.4567,
+        "model_version": None,
+        "run_id": None,
+    }
     mock_model.predict.assert_called_once()
 
 

@@ -45,3 +45,5 @@ class ProcessRequest(BaseModel):
 
 class ProcessResponse(BaseModel):
     prediction: float = Field(..., description="Predicted sales units")
+    model_version: str | None = Field(default=None, description="Loaded Model Registry version")
+    run_id: str | None = Field(default=None, description="MLflow Run that produced the model")

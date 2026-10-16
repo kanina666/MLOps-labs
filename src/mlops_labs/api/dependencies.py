@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from mlops_labs.api.schemas import ProcessRequest
 from mlops_labs.db.probes import PostgresHealthCheck
 from mlops_labs.domain.system import HealthCheck
+from mlops_labs.features import make_features
 from mlops_labs.services.health import SystemHealthCheck
 
 
@@ -38,17 +39,4 @@ def get_model(request: Request) -> Any:
 
 
 def extract_features(payload: ProcessRequest) -> pd.DataFrame:
-    sales = payload.recent_sales
-    return pd.DataFrame(
-        [
-            {
-                "lag_1": float(sales[-1]),
-                "lag_7": float(sales[-7]),
-                "lag_14": float(sales[-14]),
-                "lag_28": float(sales[-28]),
-                "rolling_mean_7": float(sum(sales[-7:]) / 7.0),
-                "day_of_week": int(payload.day_of_week),
-                "is_snap": int(payload.is_snap),
-            }
-        ]
-    )
+    return pd.DataFrame([make_features(payload.recent_sales, payload.day_of_week, payload.is_snap)])
