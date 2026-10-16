@@ -1,13 +1,12 @@
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: postgres
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: mlops_labs
     ports:
-      - "5433:5432"
+      - "${POSTGRES_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -42,11 +41,12 @@ services:
       args:
         APP_VERSION: ${APP_VERSION:-}
         VCS_REF: ${VCS_REF:-local}
-    container_name: mlops_labs_app
     ports:
-      - "8000:8000"
+      - "${APP_PORT:-8000}:8000"
     depends_on:
       postgres:
+        condition: service_healthy
+      mlflow:
         condition: service_healthy
     logging:
       driver: json-file
@@ -63,7 +63,7 @@ services:
       resources:
         limits:
           cpus: "1.0"
-          memory: 512M
+          memory: 1G
         reservations:
           cpus: "0.25"
           memory: 128M
@@ -71,6 +71,11 @@ services:
     environment:
       DATABASE_URL: "postgresql+asyncpg://postgres:postgres@postgres:5432/mlops_labs"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
+      MODEL_URI: ${MODEL_URI:-models:/m5_sales_model@champion}
+      M5_DATA_DIR: /data/raw
+    volumes:
+      - ${M5_DATA_ROOT:-../data}:/data:ro
     networks:
       - mlopslabs_network
     restart: unless-stopped
@@ -79,7 +84,6 @@ services:
   # Backend Store: метаданные (эксперименты, runs, параметры, метрики) -> отдельный PostgreSQL
   mlflow_db:
     image: postgres:16-alpine
-    container_name: mlflow_db
     environment:
       POSTGRES_USER: ${MLFLOW_DB_USER:-mlflow}
       POSTGRES_PASSWORD: ${MLFLOW_DB_PASSWORD:-mlflow}
@@ -104,7 +108,6 @@ services:
   # Artifact Store: модели, файлы, графики -> S3-совместимое хранилище MinIO
   minio:
     image: rustfs/rustfs:latest
-    container_name: mlflow_minio
     environment:
       RUSTFS_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       RUSTFS_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
@@ -149,7 +152,6 @@ services:
       context: ./mlflow
       dockerfile: Dockerfile
     image: mlflow-server:local
-    container_name: mlflow_server
     depends_on:
       mlflow_db:
         condition: service_healthy

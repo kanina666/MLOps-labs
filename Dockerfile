@@ -15,18 +15,21 @@ COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --locked --no-dev --group web --no-install-project
 
 COPY src ./src
+COPY training ./training
+COPY data/manifest.json ./data/manifest.json
 
 RUN uv sync --locked --no-dev --group web --no-editable
 
 ARG APP_VERSION=""
 ARG VCS_REF="local"
-ENV APP_VERSION_OVERRIDE=${APP_VERSION}
+ENV APP_VERSION_OVERRIDE=${APP_VERSION} \
+    MPLCONFIGDIR=/tmp/matplotlib
 LABEL org.opencontainers.image.title="mlops-labs" \
       org.opencontainers.image.version=${APP_VERSION} \
       org.opencontainers.image.revision=${VCS_REF}
 
 RUN groupadd --system appuser && useradd --system -g appuser appuser \
-    && chown -R appuser:appuser /app
+    && chown appuser:appuser /app
 
 USER appuser
 

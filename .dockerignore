@@ -1,6 +1,7 @@
 .git
 .gitignore
 .venv
+.venv-eda
 __pycache__
 *.py[cod]
 *$py.class
@@ -13,3 +14,9 @@ dist
 build
 *.egg-info
 tests
+data/raw
+artifacts
+reports
+.jupyter
+.ipython
+.matplotlib
