@@ -27,6 +27,7 @@ class JsonFormatter(logging.Formatter):
             "model_uri",
             "model_version",
             "run_id",
+            "task_id",
         ):
             if hasattr(record, field):
                 payload[field] = getattr(record, field)
@@ -49,16 +50,13 @@ def configure_logging(level: str) -> None:
             "handlers": {
                 "console": {
                     "class": "logging.StreamHandler",
-                    "stream": "ext://sys.stdout",
                     "formatter": "json",
+                    "stream": "ext://sys.stdout",
                 }
             },
-            "root": {"handlers": ["console"], "level": level},
             "loggers": {
-                "mlops_labs": {"handlers": [], "level": "NOTSET", "propagate": True},
-                "uvicorn": {"handlers": [], "level": "NOTSET", "propagate": True},
-                "uvicorn.error": {"handlers": [], "level": "NOTSET", "propagate": True},
                 "uvicorn.access": {"handlers": [], "propagate": False},
             },
+            "root": {"handlers": ["console"], "level": level},
         }
     )

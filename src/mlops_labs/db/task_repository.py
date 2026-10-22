@@ -31,6 +31,15 @@ class TaskRepository:
         await self._session.refresh(record)
         return record.to_domain()
 
+    async def delete_task(self, task_id: str) -> bool:
+        """Delete a task record from database"""
+        record = await self._session.get(TaskRecord, task_id)
+        if record is not None:
+            await self._session.delete(record)
+            await self._session.commit()
+            return True
+        return False
+
     async def get_by_id(self, task_id: str) -> Task | None:
         """Retrieve task by its UUIDv7 ID."""
         stmt = select(TaskRecord).where(TaskRecord.task_id == task_id)

@@ -117,6 +117,41 @@ services:
       - mlopslabs_network
     restart: unless-stopped
 
+  worker:
+    image: ${APP_IMAGE:-mlops-labs:local}
+    pull_policy: never
+    command: python -m mlops_labs.worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      mlflow:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://postgres:postgres@postgres:5432/mlops_labs"
+      RABBITMQ_URL: ${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672/}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
+      MODEL_URI: ${MODEL_URI:-models:/m5_sales_model@champion}
+      INFERENCE_DELAY_MS: ${INFERENCE_DELAY_MS:-0.0}
+    networks:
+      - mlopslabs_network
+    restart: unless-stopped
+
   # ---------- MLflow ----------
   # Backend Store: метаданные (эксперименты, runs, параметры, метрики) -> отдельный PostgreSQL
   mlflow_db:
