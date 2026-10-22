@@ -9,7 +9,6 @@ from fastapi import FastAPI, Request, Response
 from mlflow import MlflowClient
 from mlops_labs.api import router as api_router
 from mlops_labs.api.healthz import router as healthz_router
-from mlops_labs.api.v1.endpoints.process import router as process_router
 from mlops_labs.core.config import get_settings
 from mlops_labs.core.logging import configure_logging
 from mlops_labs.db.base import create_db_engine
@@ -97,7 +96,6 @@ def create_app() -> FastAPI:
 
     app.include_router(healthz_router)
     app.include_router(api_router)
-    app.include_router(process_router, tags=["inference"])
     return app
 
 

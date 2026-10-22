@@ -32,6 +32,40 @@ services:
       - mlopslabs_network
     restart: unless-stopped
 
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"        # AMQP
+      - "${RABBITMQ_MGMT_PORT:-15672}:15672" # Web UI
+      - "${RABBITMQ_PROM_PORT:-15692}:15692" # Prometheus
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+    networks:
+      - mlopslabs_network
+    restart: unless-stopped
+
   app:
     image: ${APP_IMAGE:-mlops-labs:local}
     pull_policy: never
@@ -45,6 +79,8 @@ services:
       - "${APP_PORT:-8000}:8000"
     depends_on:
       postgres:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
       mlflow:
         condition: service_healthy
@@ -70,6 +106,7 @@ services:
     #no .env file yet, so we set environment variables directly in the docker-compose.yaml
     environment:
       DATABASE_URL: "postgresql+asyncpg://postgres:postgres@postgres:5432/mlops_labs"
+      RABBITMQ_URL: ${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672/}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
       MODEL_URI: ${MODEL_URI:-models:/m5_sales_model@champion}
@@ -188,6 +225,7 @@ services:
 
 volumes:
   postgres_data:
+  rabbitmq_data:
   mlflow_db_data:
   minio_data:
 

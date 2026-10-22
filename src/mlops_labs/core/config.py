@@ -20,6 +20,21 @@ class Settings(BaseSettings):
     mlflow_tracking_uri: str = "http://localhost:5000"
     model_uri: str = "models:/m5_sales_model@champion"
 
+    rabbitmq_url: str = "amqp://guest:guest@localhost:5672/"
+    rabbitmq_queue: str = "mlops.tasks"
+    rabbitmq_dlq_queue: str = "mlops.tasks.dlq"
+    rabbitmq_exchange: str = "mlops.direct"
+    rabbitmq_dlx_exchange: str = "mlops.dlx"
+    rabbitmq_routing_key: str = "task.predict"
+
+    rabbitmq_prefetch_count: int = 1
+    rabbitmq_max_queue_length: int = 10
+
+    # increase in tests to simulate longer inference time and test retry mechanism
+    inference_delay_ms: float = 0.0
+    max_retries: int = 3
+    retry_after_seconds: int = 5
+
     @property
     def app_version(self) -> str:
         if self.app_version_override:

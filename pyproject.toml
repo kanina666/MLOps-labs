@@ -30,6 +30,7 @@ eda = [
     "mlflow-skinny==2.22.0",
 ]
 dev = [
+    "aiosqlite>=0.20.0",
     "httpx>=0.28.1",
     "mypy>=2.3.1",
     "pandas-stubs>=2.3,<2.4",
@@ -38,6 +39,7 @@ dev = [
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
     "ruff>=0.16.7",
+    "testcontainers[rabbitmq]>=4.9.0",
 ]
 web = [
     "asyncpg>=0.31.0",
@@ -50,6 +52,7 @@ web = [
     "numpy>=2.2.0",
     "pandas==2.3.3",
     "matplotlib==3.10.7",
+    "faststream[rabbit]",
 ]
 
 [tool.uv]

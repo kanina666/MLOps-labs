@@ -33,21 +33,20 @@ async def test_alias_is_resolved_once_and_loaded_version_is_reported(monkeypatch
             version="8", run_id="run-8"
         )
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as http:
-            for path in ("/api/v1/process", "/process"):
-                response = await http.post(
-                    path,
-                    json={"recent_sales": [10.0] * 28, "day_of_week": 3},
-                )
-                assert response.status_code == 200
-                assert response.json() == {
-                    "prediction": 123.0,
-                    "model_version": "7",
-                    "run_id": "run-7",
-                }
+            response = await http.post(
+                "/api/v1/process",
+                json={"recent_sales": [10.0] * 28, "day_of_week": 3},
+            )
+            assert response.status_code == 200
+            assert response.json() == {
+                "prediction": 123.0,
+                "model_version": "7",
+                "run_id": "run-7",
+            }
 
     client.get_model_version_by_alias.assert_called_once_with("m5_sales_model", "champion")
     load_model.assert_called_once_with("models:/m5_sales_model/7")
-    assert model.predict.call_count == 2
+    assert model.predict.call_count == 1
     assert app.state.model_info["model_version"] == "7"
     record = next(record for record in caplog.records if record.message == "model.loaded")
     payload = json.loads(JsonFormatter().format(record))

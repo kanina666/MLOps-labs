@@ -1,7 +1,13 @@
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from mlops_labs.core.config import Settings
+from mlops_labs.db.models import Base
 
 
 def create_db_engine(settings: Settings) -> AsyncEngine:
@@ -13,6 +19,15 @@ def create_db_engine(settings: Settings) -> AsyncEngine:
         pool_recycle=settings.pool_recycle,
         pool_pre_ping=True,
     )
+
+
+def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
+    return async_sessionmaker(engine, expire_on_commit=False)
+
+
+async def init_db(engine: AsyncEngine) -> None:
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
 
 async def ping_postgres(engine: AsyncEngine) -> str:

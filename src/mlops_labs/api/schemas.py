@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -47,3 +48,23 @@ class ProcessResponse(BaseModel):
     prediction: float = Field(..., description="Predicted sales units")
     model_version: str | None = Field(default=None, description="Loaded Model Registry version")
     run_id: str | None = Field(default=None, description="MLflow Run that produced the model")
+
+
+class TaskSubmitResponse(BaseModel):
+    task_id: str = Field(..., description="UUIDv7 identifier of the created task")
+    status: Literal["PENDING", "PROCESSING", "COMPLETED", "FAILED"] = Field(
+        ..., description="Current status of the task"
+    )
+
+
+class TaskResponse(BaseModel):
+    task_id: str = Field(..., description="UUIDv7 identifier of the task")
+    status: Literal["PENDING", "PROCESSING", "COMPLETED", "FAILED"] = Field(
+        ..., description="Current lifecycle status of the task"
+    )
+    prediction: float | None = Field(default=None, description="Inference prediction result")
+    model_version: str | None = Field(default=None, description="Loaded Model Registry version")
+    run_id: str | None = Field(default=None, description="MLflow Run ID that produced the model")
+    error: str | None = Field(default=None, description="Sanitized error description if failed")
+    created_at: datetime | None = Field(default=None, description="Task creation timestamp")
+    updated_at: datetime | None = Field(default=None, description="Last update timestamp")
