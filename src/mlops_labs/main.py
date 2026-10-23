@@ -9,9 +9,10 @@ from faststream.rabbit import RabbitBroker
 from mlops_labs.api import router as api_router
 from mlops_labs.api.healthz import router as healthz_router
 from mlops_labs.broker.probes import RabbitMQHealthCheck
+from mlops_labs.broker.topology import declare_topology
 from mlops_labs.core.config import get_settings
 from mlops_labs.core.logging import configure_logging
-from mlops_labs.db.base import create_db_engine, create_session_factory
+from mlops_labs.db.base import create_db_engine, create_session_factory, init_db
 from mlops_labs.db.probes import PostgresHealthCheck
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     settings = get_settings()
     configure_logging(settings.log_level)
     engine = create_db_engine(settings)
+    if hasattr(engine, "begin"):
+        await init_db(engine)
     session_factory = create_session_factory(engine)
     app.state.settings = settings
     app.state.engine = engine
@@ -32,9 +35,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.health_checks = [postgres_check, rabbitmq_check]
 
     broker = RabbitBroker(url=settings.rabbitmq_url)
-    app.state.broker = broker
+    app.state.broker = None
     try:
         await broker.connect()
+        await declare_topology(broker, settings)
+        app.state.broker = broker
     except Exception as exc:
         logger.warning(
             "broker.connection_failed",

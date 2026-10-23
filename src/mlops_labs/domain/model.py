@@ -8,3 +8,10 @@ class LoadedModel:
     model_version: str | None
     run_id: str | None
     model_uri: str
+
+
+@dataclass(frozen=True, slots=True)
+class PredictionResult:
+    prediction: float
+    model_version: str | None
+    run_id: str | None
