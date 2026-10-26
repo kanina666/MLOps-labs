@@ -5,6 +5,7 @@ from fastapi import Depends, HTTPException, Request, status
 from faststream.rabbit import RabbitBroker
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from mlops_labs.core.config import Settings, get_settings
 from mlops_labs.db.base import create_session_factory
 from mlops_labs.db.task_repository import TaskRepository
 from mlops_labs.domain.system import HealthCheck
@@ -34,13 +35,16 @@ async def get_task_repository(
         yield TaskRepository(session)
 
 
-def get_broker(request: Request) -> RabbitBroker:
+def get_broker(
+    request: Request,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> RabbitBroker:
     broker = getattr(request.app.state, "broker", None)
     if not isinstance(broker, RabbitBroker):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Broker is not initialized or unavailable",
-            headers={"Retry-After": "5"},
+            headers={"Retry-After": str(settings.effective_retry_after_seconds)},
         )
     return broker
 

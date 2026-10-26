@@ -1,5 +1,4 @@
 import logging
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
@@ -16,7 +15,7 @@ from mlops_labs.db.base import create_session_factory, init_db
 from mlops_labs.db.task_repository import TaskRepository
 from mlops_labs.domain.model import LoadedModel
 from mlops_labs.domain.tasks import TaskStatus
-from mlops_labs.services.model import ModelPredictor
+from mlops_labs.services.model import ModelPredictor, ModelUnavailableError
 
 
 @pytest.fixture(autouse=True)
@@ -89,7 +88,7 @@ async def test_worker_processes_task_successfully(worker_env) -> None:
             assert task.error is None
 
 
-async def test_worker_inbox_idempotency_duplicate_skipped(worker_env) -> None:
+async def test_worker_inbox_idempotency_duplicate_skipped(worker_env, mock_loaded_model) -> None:
     app, session_factory, _ = worker_env
 
     async with TestRabbitBroker(app.broker) as br, TestApp(app):
@@ -122,6 +121,8 @@ async def test_worker_inbox_idempotency_duplicate_skipped(worker_env) -> None:
             assert task is not None
             assert task.prediction == 999.0
             assert task.model_version == "old"
+
+        mock_loaded_model.model.predict.assert_not_called()
 
 
 async def test_worker_missing_task_id_ignored(worker_env, caplog: pytest.LogCaptureFixture) -> None:
@@ -177,29 +178,18 @@ async def test_worker_feature_extraction_failure_marks_failed(worker_env) -> Non
             assert "At least 28 days of sales history are required" in (task.error or "")
 
 
-async def test_worker_model_unavailable_marks_failed(
+async def test_worker_model_unavailable_fails_startup(
     test_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    engine, session_factory = test_db
+    engine, _ = test_db
     settings = Settings(rabbitmq_queue="mlops.tasks", inference_delay_ms=0.0)
     monkeypatch.setattr(worker, "create_db_engine", lambda _s: engine)
     monkeypatch.setattr(worker, "load_model", lambda **_kw: None)
     app = worker.create_worker_app(settings)
 
-    message = {
-        "task_id": "no-model-task",
-        "payload": {"recent_sales": [1.0] * 28, "day_of_week": 2},
-    }
-
-    async with TestRabbitBroker(app.broker) as br, TestApp(app):
-        await br.publish(message, queue="mlops.tasks")
-
-        async with session_factory() as session:
-            repo = TaskRepository(session)
-            task = await repo.get_by_id("no-model-task")
-            assert task is not None
-            assert task.status == TaskStatus.FAILED
-            assert task.error == "Model is not loaded or unavailable"
+    with pytest.raises(ModelUnavailableError, match="cannot start"):
+        async with TestRabbitBroker(app.broker), TestApp(app):
+            pytest.fail("Worker must not consume tasks without a model")
 
 
 async def test_worker_lifespan(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -227,9 +217,9 @@ async def test_worker_lifespan(monkeypatch: pytest.MonkeyPatch) -> None:
     engine_mock.dispose.assert_awaited_once()
 
 
-async def test_handle_task_message_retry_and_dlq(test_db, mock_loaded_model) -> None:
+async def test_handle_task_message_retry_counter_survives_new_repository_sessions(test_db) -> None:
     _, session_factory = test_db
-    settings = Settings(max_retries=3)
+    settings = Settings(max_retries=3, retry_delay_seconds=0.001)
 
     failing_model = MagicMock()
     failing_model.predict.side_effect = RuntimeError("Temporary GPU/IO glitch")
@@ -246,37 +236,28 @@ async def test_handle_task_message_retry_and_dlq(test_db, mock_loaded_model) -> 
     }
 
     try:
+        for attempt in range(1, 4):
+            async with session_factory() as session:
+                repo = TaskRepository(session)
+                expected = NackMessage if attempt < 3 else RejectMessage
+                with pytest.raises(expected):
+                    await worker.handle_task_message(
+                        body=msg,
+                        repo=repo,
+                        predictor=predictor,
+                        worker_settings=settings,
+                    )
+                task = await repo.get_by_id("transient-task-1")
+                assert task is not None
+                assert task.attempts == attempt
+                assert task.status == (TaskStatus.PENDING if attempt < 3 else TaskStatus.FAILED)
+
         async with session_factory() as session:
             repo = TaskRepository(session)
-            raw_msg_attempt_1 = SimpleNamespace(
-                headers={"x-retry-count": 0},
-                raw_message=SimpleNamespace(redelivered=False),
-            )
-            with pytest.raises(NackMessage):
-                await worker.handle_task_message(
-                    body=msg,
-                    repo=repo,
-                    predictor=predictor,
-                    worker_settings=settings,
-                    raw_message=raw_msg_attempt_1,  # type: ignore[arg-type]
-                )
-
-            raw_msg_exhausted = SimpleNamespace(
-                headers={"x-retry-count": 2},
-                raw_message=SimpleNamespace(redelivered=True),
-            )
-            with pytest.raises(RejectMessage):
-                await worker.handle_task_message(
-                    body=msg,
-                    repo=repo,
-                    predictor=predictor,
-                    worker_settings=settings,
-                    raw_message=raw_msg_exhausted,  # type: ignore[arg-type]
-                )
-
             task = await repo.get_by_id("transient-task-1")
             assert task is not None
             assert task.status == TaskStatus.FAILED
             assert "Temporary GPU/IO glitch" in (task.error or "")
+        assert failing_model.predict.call_count == 3
     finally:
         predictor.shutdown()

@@ -5,10 +5,13 @@ from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
 from faststream import AckPolicy, Context, ContextRepo, Depends, FastStream
+from faststream.asgi import AsgiFastStream
 from faststream.exceptions import NackMessage, RejectMessage
 from faststream.rabbit import Channel, RabbitBroker, RabbitMessage, RabbitRouter
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from starlette.responses import JSONResponse
+from starlette.types import Receive, Scope, Send
 
 from mlops_labs.broker.topology import build_tasks_queue, declare_topology
 from mlops_labs.core.config import Settings, get_settings
@@ -34,19 +37,6 @@ class TaskEnvelope(BaseModel):
 
     task_id: str = Field(..., min_length=1)
     payload: WorkerTaskPayloadSchema
-
-
-def _get_delivery_attempt(raw_message: RabbitMessage | None) -> int:
-    """Extract current delivery attempt number from AMQP headers or redelivered flag."""
-    if raw_message is None:
-        return 1
-    headers = raw_message.headers or {}
-    if "x-retry-count" in headers:
-        return int(headers["x-retry-count"]) + 1
-    raw = getattr(raw_message, "raw_message", None)
-    if raw is not None and getattr(raw, "redelivered", False):
-        return 2
-    return 1
 
 
 async def get_task_repository(
@@ -75,7 +65,7 @@ async def handle_task_message(
         logger.error("worker.invalid_message", extra={"error_type": "InvalidMessage"})
         raise RejectMessage()
 
-    # Claim task in DB for idempotency (Inbox pattern)
+    # Count attempts in DB: redelivered is only a boolean flag
     if not await repo.claim_for_processing(task_id=raw_task_id, payload=raw_payload):
         logger.info("task.skipped", extra={"task_id": raw_task_id})
         return
@@ -96,12 +86,14 @@ async def handle_task_message(
         )
         raise RejectMessage() from exc
     except Exception as exc:
-        attempt = _get_delivery_attempt(raw_message)
+        attempt = repo.processing_attempts
         if attempt < worker_settings.max_retries:
+            await repo.mark_retry(task_id=raw_task_id, error=str(exc))
             logger.warning(
                 "task.retry",
                 extra={"task_id": raw_task_id, "error_type": type(exc).__name__},
             )
+            await asyncio.sleep(worker_settings.retry_delay_seconds)
             raise NackMessage(requeue=True) from exc
 
         await repo.mark_failed(task_id=raw_task_id, error=str(exc))
@@ -111,6 +103,7 @@ async def handle_task_message(
         )
         raise RejectMessage() from exc
 
+    # Save the result before returning and letting FastStream send ACK
     await repo.mark_completed(
         task_id=raw_task_id,
         prediction=result.prediction,
@@ -152,6 +145,8 @@ def create_worker_app(settings: Settings | None = None) -> FastStream:
     broker = RabbitBroker(
         url=resolved_settings.rabbitmq_url,
         default_channel=channel,
+        # FastStream 0.7.7 skips draining with None; infinity waits for active handlers
+        graceful_timeout=float("inf"),
     )
     broker.include_router(build_worker_router(resolved_settings))
 
@@ -160,27 +155,32 @@ def create_worker_app(settings: Settings | None = None) -> FastStream:
         configure_logging(resolved_settings.log_level)
 
         engine = create_db_engine(resolved_settings)
-        await init_db(engine)
-        session_factory = create_session_factory(engine)
-
-        loaded_model = await asyncio.to_thread(load_model, settings=resolved_settings)
-        predictor = ModelPredictor(
-            loaded_model=loaded_model,
-            max_workers=resolved_settings.rabbitmq_prefetch_count,
-            inference_delay_ms=resolved_settings.inference_delay_ms,
-        )
-
-        context.set_global("settings", resolved_settings)
-        context.set_global("session_factory", session_factory)
-        context.set_global("predictor", predictor)
-
-        await declare_topology(broker, resolved_settings)
-
-        logger.info("worker.started")
+        predictor: ModelPredictor | None = None
         try:
+            await init_db(engine)
+            session_factory = create_session_factory(engine)
+            loaded_model = await asyncio.to_thread(load_model, settings=resolved_settings)
+            if loaded_model is None:
+                raise ModelUnavailableError("Worker cannot start without its registered model")
+            predictor = ModelPredictor(
+                loaded_model=loaded_model,
+                max_workers=resolved_settings.worker_concurrency,
+                inference_delay_ms=resolved_settings.inference_delay_ms,
+            )
+
+            context.set_global("settings", resolved_settings)
+            context.set_global("session_factory", session_factory)
+            context.set_global("predictor", predictor)
+
+            # FastStream has not connected the broker yet when lifespan starts
+            await broker.connect()
+            await declare_topology(broker, resolved_settings)
+            logger.info("worker.started")
             yield
         finally:
-            await asyncio.to_thread(predictor.shutdown)
+            await broker.stop()
+            if predictor is not None:
+                await asyncio.to_thread(predictor.shutdown)
             await engine.dispose()
             context.reset_global("predictor")
             context.reset_global("session_factory")
@@ -192,5 +192,23 @@ def create_worker_app(settings: Settings | None = None) -> FastStream:
 
 app = create_worker_app()
 
+
+async def worker_health(scope: Scope, receive: Receive, send: Send) -> None:
+    await JSONResponse({"status": "ok"})(scope, receive, send)
+
+
+def create_worker_asgi_app(settings: Settings | None = None) -> AsgiFastStream:
+    return create_worker_app(settings).as_asgi(asgi_routes=[("/healthz", worker_health)])
+
+
+asgi_app = app.as_asgi(asgi_routes=[("/healthz", worker_health)])
+
 if __name__ == "__main__":
-    asyncio.run(app.run())
+    import uvicorn
+
+    uvicorn.run(
+        asgi_app,
+        host="0.0.0.0",  # noqa: S104 - container health endpoint
+        port=get_settings().worker_health_port,
+        timeout_graceful_shutdown=None,
+    )

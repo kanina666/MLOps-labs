@@ -2,7 +2,6 @@
 name = "mlops-labs"
 version = "0.1.0"
 description = "Async FastAPI service with health-checks for MLOps labs"
-readme = "README.md"
 authors = [
     { name = "nina", email = "ninakonkova19@yandex.ru" }
 ]
@@ -35,6 +34,7 @@ dev = [
     "mypy>=2.3.1",
     "pandas-stubs>=2.3,<2.4",
     "pre-commit>=4.6.2",
+    "psutil>=5.9",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
@@ -97,6 +97,10 @@ plugins = ["pydantic.mypy"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "integration: real RabbitMQ/PostgreSQL checks (RUN_RABBITMQ_INTEGRATION=1)",
+    "docker_worker: real Linux worker SIGTERM check (RUN_WORKER_DOCKER_TESTS=1)",
+]
 
 [tool.coverage.run]
 source = ["src/mlops_labs"]

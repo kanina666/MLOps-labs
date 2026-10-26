@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import DateTime, Enum, Float, String, Text
+from sqlalchemy import DateTime, Enum, Float, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import JSON
@@ -31,6 +31,7 @@ class TaskRecord(Base):
     model_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
     run_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -52,6 +53,7 @@ class TaskRecord(Base):
             model_version=self.model_version,
             run_id=self.run_id,
             error=self.error,
+            attempts=self.attempts,
             created_at=self.created_at,
             updated_at=self.updated_at,
         )

@@ -1,4 +1,5 @@
 from faststream.rabbit import ExchangeType, RabbitBroker, RabbitExchange, RabbitQueue
+from faststream.rabbit.schemas.queue import ClassicQueueArgs
 
 from mlops_labs.core.config import Settings
 
@@ -20,15 +21,17 @@ def build_dlx_exchange(settings: Settings) -> RabbitExchange:
 
 
 def build_tasks_queue(settings: Settings) -> RabbitQueue:
+    arguments: ClassicQueueArgs = {
+        "x-overflow": "reject-publish",
+        "x-dead-letter-exchange": settings.rabbitmq_dlx_exchange,
+        "x-dead-letter-routing-key": settings.rabbitmq_dlq_queue,
+    }
+    if settings.rabbitmq_max_queue_length:
+        arguments["x-max-length"] = settings.rabbitmq_max_queue_length
     return RabbitQueue(
         name=settings.rabbitmq_queue,
         durable=True,
-        arguments={
-            "x-max-length": settings.rabbitmq_max_queue_length,
-            "x-overflow": "reject-publish",
-            "x-dead-letter-exchange": settings.rabbitmq_dlx_exchange,
-            "x-dead-letter-routing-key": settings.rabbitmq_dlq_queue,
-        },
+        arguments=arguments,
     )
 
 

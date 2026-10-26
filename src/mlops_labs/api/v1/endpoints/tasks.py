@@ -7,6 +7,7 @@ from faststream.rabbit import RabbitBroker
 from mlops_labs.api.dependencies import get_broker, get_task_repository
 from mlops_labs.api.schemas import ProcessRequest, TaskResponse, TaskSubmitResponse
 from mlops_labs.api.v1.mappers import to_task_response_dto, to_task_submit_response_dto
+from mlops_labs.broker.publishing import publish_task
 from mlops_labs.core.config import Settings, get_settings
 from mlops_labs.core.uuid7 import generate_uuid7_str
 from mlops_labs.db.task_repository import TaskRepository
@@ -26,15 +27,9 @@ async def submit_task(
     task_id = generate_uuid7_str()
     payload_dict = payload.model_dump()
 
-    task = await repo.create_task(payload=payload_dict, task_id=task_id)
-
     try:
-        await broker.publish(
-            {"task_id": task_id, "payload": payload_dict},
-            queue=settings.rabbitmq_queue,
-        )
+        await publish_task(broker, settings, task_id, payload_dict)
     except Exception as exc:
-        await repo.delete_task(task_id)
         logger.warning(
             "task.shed",
             extra={
@@ -45,9 +40,11 @@ async def submit_task(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Service overloaded or queue is full",
-            headers={"Retry-After": str(settings.retry_after_seconds)},
+            headers={"Retry-After": str(settings.effective_retry_after_seconds)},
         ) from exc
 
+    # Preserve a result the worker may have saved before this insert
+    task = await repo.create_task(payload=payload_dict, task_id=task_id)
     return to_task_submit_response_dto(task)
 
 

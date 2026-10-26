@@ -111,6 +111,15 @@ services:
       MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
       MODEL_URI: ${MODEL_URI:-models:/m5_sales_model@champion}
       M5_DATA_DIR: /data/raw
+      RABBITMQ_QUEUE: ${RABBITMQ_QUEUE:-mlops.tasks}
+      RABBITMQ_DLQ_QUEUE: ${RABBITMQ_DLQ_QUEUE:-mlops.tasks.dlq}
+      # Buffer: 2 workers * ceil(1s retry pause / 0.2s inference) = 10
+      # Use the same limit for all publishers and workers
+      RABBITMQ_MAX_QUEUE_LENGTH: ${RABBITMQ_MAX_QUEUE_LENGTH:-10}
+      PUBLISH_TIMEOUT_SECONDS: ${PUBLISH_TIMEOUT_SECONDS:-0.5}
+      INFERENCE_DELAY_MS: ${INFERENCE_DELAY_MS:-200.0}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      RETRY_AFTER_SECONDS: ${RETRY_AFTER_SECONDS:-}
     volumes:
       - ${M5_DATA_ROOT:-../data}:/data:ro
     networks:
@@ -121,6 +130,13 @@ services:
     image: ${APP_IMAGE:-mlops-labs:local}
     pull_policy: never
     command: python -m mlops_labs.worker
+    stop_grace_period: ${WORKER_STOP_GRACE_PERIOD:-45s}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2).read()\""]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
     depends_on:
       postgres:
         condition: service_healthy
@@ -147,10 +163,40 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
       MODEL_URI: ${MODEL_URI:-models:/m5_sales_model@champion}
-      INFERENCE_DELAY_MS: ${INFERENCE_DELAY_MS:-0.0}
+      INFERENCE_DELAY_MS: ${INFERENCE_DELAY_MS:-200.0}
+      RABBITMQ_QUEUE: ${RABBITMQ_QUEUE:-mlops.tasks}
+      RABBITMQ_DLQ_QUEUE: ${RABBITMQ_DLQ_QUEUE:-mlops.tasks.dlq}
+      RABBITMQ_MAX_QUEUE_LENGTH: ${RABBITMQ_MAX_QUEUE_LENGTH:-10}
+      RABBITMQ_PREFETCH_COUNT: ${RABBITMQ_PREFETCH_COUNT:-1}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      MAX_RETRIES: ${MAX_RETRIES:-3}
+      RETRY_DELAY_SECONDS: ${RETRY_DELAY_SECONDS:-0.2}
     networks:
       - mlopslabs_network
     restart: unless-stopped
+
+  source:
+    profiles: ["tools"]
+    image: ${APP_IMAGE:-mlops-labs:local}
+    pull_policy: never
+    command: python -m mlops_labs.source --input /data/batch.jsonl
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      RABBITMQ_URL: ${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672/}
+      RABBITMQ_QUEUE: ${RABBITMQ_QUEUE:-mlops.tasks}
+      RABBITMQ_DLQ_QUEUE: ${RABBITMQ_DLQ_QUEUE:-mlops.tasks.dlq}
+      RABBITMQ_MAX_QUEUE_LENGTH: ${RABBITMQ_MAX_QUEUE_LENGTH:-10}
+      PUBLISH_TIMEOUT_SECONDS: ${PUBLISH_TIMEOUT_SECONDS:-0.5}
+      SOURCE_RETRY_DELAY_SECONDS: ${SOURCE_RETRY_DELAY_SECONDS:-0.05}
+      SOURCE_RETRY_MAX_DELAY_SECONDS: ${SOURCE_RETRY_MAX_DELAY_SECONDS:-1.0}
+    volumes:
+      - ${M5_DATA_ROOT:-../data}:/data:ro
+    healthcheck:
+      disable: true
+    networks:
+      - mlopslabs_network
 
   # ---------- MLflow ----------
   # Backend Store: метаданные (эксперименты, runs, параметры, метрики) -> отдельный PostgreSQL

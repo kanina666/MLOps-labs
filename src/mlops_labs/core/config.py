@@ -1,12 +1,14 @@
 from functools import cache
 from importlib.metadata import PackageNotFoundError, version
+from math import ceil
 from typing import Literal
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore", env_ignore_empty=True)
 
     database_url: str = "postgresql+asyncpg://user:password@localhost:5432/mlops_labs"
     pool_size: int = 5
@@ -27,13 +29,27 @@ class Settings(BaseSettings):
     rabbitmq_dlx_exchange: str = "mlops.dlx"
     rabbitmq_routing_key: str = "task.predict"
 
-    rabbitmq_prefetch_count: int = 1
-    rabbitmq_max_queue_length: int = 10
+    # Zero disables the limit for the unbounded benchmark
+    rabbitmq_prefetch_count: int = Field(default=1, ge=0)
+    # Buffer: 2 workers * ceil(1s retry pause / 0.2s inference) = 10
+    # Recheck changed settings with benchmark_backpressure --capacity-study
+    rabbitmq_max_queue_length: int = Field(default=10, ge=0)
+    worker_concurrency: int = Field(default=1, ge=1)
+    worker_health_port: int = Field(default=8000, ge=1, le=65535)
 
-    # increase in tests to simulate longer inference time and test retry mechanism
-    inference_delay_ms: float = 0.0
-    max_retries: int = 3
-    retry_after_seconds: int = 5
+    inference_delay_ms: float = Field(default=200.0, ge=0)
+    max_retries: int = Field(default=3, ge=1)
+    retry_delay_seconds: float = Field(default=0.2, gt=0)
+    publish_timeout_seconds: float = Field(default=0.5, gt=0)
+    source_retry_delay_seconds: float = Field(default=0.05, gt=0)
+    source_retry_max_delay_seconds: float = Field(default=1.0, gt=0)
+    retry_after_seconds: int | None = Field(default=None, ge=1)
+
+    @property
+    def effective_retry_after_seconds(self) -> int:
+        if self.retry_after_seconds is not None:
+            return self.retry_after_seconds
+        return max(1, ceil(self.inference_delay_ms / 1000 / self.worker_concurrency))
 
     @property
     def app_version(self) -> str:

@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncGenerator, Generator
 from unittest.mock import AsyncMock
 
@@ -7,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import StaticPool
 
 from mlops_labs.api.dependencies import get_broker, get_session_factory
+from mlops_labs.core.config import Settings, get_settings
 from mlops_labs.db.base import create_session_factory, init_db
 from mlops_labs.db.task_repository import TaskRepository
 from mlops_labs.domain.tasks import TaskStatus
@@ -41,6 +43,7 @@ def _setup_app_dependencies(
 ) -> Generator[None, None, None]:
     app.dependency_overrides[get_session_factory] = lambda: task_test_db
     app.dependency_overrides[get_broker] = lambda: mock_broker
+    app.dependency_overrides[get_settings] = lambda: Settings(_env_file=None)
     yield
     app.dependency_overrides.clear()
 
@@ -68,6 +71,9 @@ async def test_submit_task_success(
     publish_args, publish_kwargs = mock_broker.publish.call_args
     assert publish_args[0]["task_id"] == task_id
     assert publish_args[0]["payload"]["recent_sales"] == [10.0] * 28
+    assert publish_kwargs["persist"] is True
+    assert publish_kwargs["mandatory"] is True
+    assert publish_kwargs["timeout"] == Settings(_env_file=None).publish_timeout_seconds
 
     # Verify task exists in DB with PENDING status
     async with task_test_db() as session:
@@ -93,15 +99,41 @@ async def test_submit_task_load_shedding_queue_full(
     response = await async_client.post("/api/v1/tasks", json=payload)
 
     assert response.status_code == 503
-    assert response.headers.get("retry-after") == "5"
+    assert response.headers.get("retry-after") == str(
+        Settings(_env_file=None).effective_retry_after_seconds
+    )
     assert "Service overloaded" in response.json()["detail"]
 
     # Crucial: task must NOT remain in DB in PENDING state!
     async with task_test_db() as session:
         repo = TaskRepository(session)
-        # Check that no tasks exist in DB
-        tasks_in_db = [await repo.get_by_id(f"any-{i}") for i in range(1)]
-        assert all(t is None for t in tasks_in_db)
+        refused_task_id = mock_broker.publish.call_args.args[0]["task_id"]
+        assert await repo.get_by_id(refused_task_id) is None
+
+
+async def test_submit_task_publish_timeout_has_no_pending_row(
+    async_client: AsyncClient,
+    task_test_db: async_sessionmaker[AsyncSession],
+    mock_broker: AsyncMock,
+) -> None:
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        _env_file=None, publish_timeout_seconds=0.01, retry_after_seconds=3
+    )
+
+    async def stalled_publish(*_args, **_kwargs) -> None:
+        await asyncio.sleep(60)
+
+    mock_broker.publish.side_effect = stalled_publish
+    response = await async_client.post(
+        "/api/v1/tasks",
+        json={"recent_sales": [10.0] * 28, "day_of_week": 3, "is_snap": 0},
+    )
+
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "3"
+    task_id = mock_broker.publish.call_args.args[0]["task_id"]
+    async with task_test_db() as session:
+        assert await TaskRepository(session).get_by_id(task_id) is None
 
 
 async def test_submit_task_broker_unavailable(
@@ -118,7 +150,9 @@ async def test_submit_task_broker_unavailable(
     response = await async_client.post("/api/v1/tasks", json=payload)
 
     assert response.status_code == 503
-    assert response.headers.get("retry-after") == "5"
+    assert response.headers.get("retry-after") == str(
+        Settings(_env_file=None).effective_retry_after_seconds
+    )
     assert response.json()["detail"] == "Broker is not initialized or unavailable"
 
 

@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from time import perf_counter
 
 from fastapi import FastAPI, Request, Response
-from faststream.rabbit import RabbitBroker
+from faststream.rabbit import Channel, RabbitBroker
 
 from mlops_labs.api import router as api_router
 from mlops_labs.api.healthz import router as healthz_router
@@ -34,7 +34,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     rabbitmq_check = RabbitMQHealthCheck(url=settings.rabbitmq_url)
     app.state.health_checks = [postgres_check, rabbitmq_check]
 
-    broker = RabbitBroker(url=settings.rabbitmq_url)
+    broker = RabbitBroker(
+        url=settings.rabbitmq_url,
+        default_channel=Channel(on_return_raises=True),
+    )
     app.state.broker = None
     try:
         await broker.connect()

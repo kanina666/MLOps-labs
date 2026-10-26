@@ -1,0 +1,157 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      full_checks:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  UV_VERSION: "0.12.17"
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  checks:
+    name: Lint, format and file hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+
+      - name: Install locked development tools
+        run: uv sync --locked --only-group dev --no-install-project
+
+      - name: Lint
+        run: uv run --no-sync ruff check .
+
+      - name: Check formatting
+        run: uv run --no-sync ruff format --check .
+
+      - name: File hygiene
+        env:
+          SKIP: ruff-check,ruff-format
+        run: uv run --no-sync pre-commit run --all-files --show-diff-on-failure
+
+  tests:
+    name: Types, tests and coverage
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || inputs.full_checks == true
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+
+      - name: Install locked dependencies
+        run: uv sync --locked
+
+      - name: Check types
+        run: uv run --locked mypy src
+
+      - name: Tests and coverage
+        run: >-
+          uv run --locked pytest -m 'not integration'
+          --cov=mlops_labs
+          --cov-report=term-missing
+          --cov-report=xml
+          --junitxml=test-results.xml
+
+      - name: Real RabbitMQ and PostgreSQL integration tests
+        env:
+          RUN_RABBITMQ_INTEGRATION: "1"
+        run: >-
+          uv run --locked pytest tests/test_rabbitmq_integration.py -q
+          -k 'not linux_sigterm'
+          --junitxml=integration-results.xml
+
+      - name: Save test reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: test-reports
+          path: |
+            coverage.xml
+            test-results.xml
+            integration-results.xml
+          if-no-files-found: warn
+          retention-days: 14
+
+  container:
+    name: Build images and check worker shutdown
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    needs: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+
+      - name: Build application image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          load: true
+          push: false
+          tags: mlops-labs:ci
+          build-args: |
+            VCS_REF=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build the MLflow server image
+        run: docker compose build mlflow
+
+      - name: Check graceful worker shutdown in Linux
+        env:
+          MLOPS_TEST_IMAGE: mlops-labs:ci
+          RUN_RABBITMQ_INTEGRATION: "1"
+          RUN_WORKER_DOCKER_TESTS: "1"
+        run: >-
+          uv run --locked pytest
+          tests/test_rabbitmq_integration.py::test_linux_sigterm_drains_inflight_before_ack
+          -q --junitxml=shutdown-results.xml
+
+      - name: Save shutdown test report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: shutdown-test-report
+          path: shutdown-results.xml
+          if-no-files-found: warn
+          retention-days: 14

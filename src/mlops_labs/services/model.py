@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import mlflow.pyfunc
@@ -42,6 +43,12 @@ class ModelPredictor:
         if self._loaded_model is None:
             raise ModelUnavailableError("Model is not loaded or unavailable")
 
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self._executor, self._predict_sync, payload)
+
+    def _predict_sync(self, payload: TaskPayload) -> PredictionResult:
+        if self._loaded_model is None:
+            raise ModelUnavailableError("Model is not loaded or unavailable")
         features_row = make_features(
             history=payload.recent_sales,
             day_of_week=payload.day_of_week,
@@ -50,14 +57,10 @@ class ModelPredictor:
         features_df = pd.DataFrame([features_row])
 
         if self._inference_delay_ms > 0:
-            await asyncio.sleep(self._inference_delay_ms / 1000.0)
+            # Simulate slow inference inside the worker slot, outside the event loop
+            time.sleep(self._inference_delay_ms / 1000.0)
 
-        loop = asyncio.get_running_loop()
-        raw_pred = await loop.run_in_executor(
-            self._executor,
-            self._loaded_model.model.predict,
-            features_df,
-        )
+        raw_pred = self._loaded_model.model.predict(features_df)
         return PredictionResult(
             prediction=round(float(raw_pred[0]), 4),
             model_version=self._loaded_model.model_version,
@@ -99,7 +102,7 @@ def load_model(
             parsed_name, parsed_alias = resolved_uri.removeprefix("models:/").rsplit("@", 1)
             client = MlflowClient()
             version = client.get_model_version_by_alias(parsed_name, parsed_alias)
-            model_version = version.version
+            model_version = str(version.version)
             run_id = version.run_id
             resolved_uri = f"models:/{parsed_name}/{model_version}"
 
