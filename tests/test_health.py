@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from httpx import AsyncClient
 
-from mlops_labs.api.dependencies import get_db_engine, get_health_checks
+from mlops_labs.api.dependencies import get_health_checks
 from mlops_labs.core.config import Settings, get_settings
 from mlops_labs.db.probes import PostgresHealthCheck
 from mlops_labs.domain.system import DependencyHealth, HealthCheck
@@ -172,7 +172,8 @@ async def test_system_health_check_safe_check_isolates_unhandled_exception(
 
 
 async def test_health_ok_when_db_available(async_client: AsyncClient) -> None:
-    app.dependency_overrides[get_db_engine] = lambda: _fake_engine(pg_version="16.1")
+    engine = _fake_engine(pg_version="16.1")
+    app.dependency_overrides[get_health_checks] = lambda: [PostgresHealthCheck(engine=engine)]
 
     response = await async_client.get("/api/v1/health")
 
@@ -184,9 +185,8 @@ async def test_health_ok_when_db_available(async_client: AsyncClient) -> None:
 
 
 async def test_health_503_when_db_unavailable(async_client: AsyncClient) -> None:
-    app.dependency_overrides[get_db_engine] = lambda: _fake_engine(
-        error=ConnectionRefusedError("connection refused")
-    )
+    engine = _fake_engine(error=ConnectionRefusedError("connection refused"))
+    app.dependency_overrides[get_health_checks] = lambda: [PostgresHealthCheck(engine=engine)]
 
     response = await async_client.get("/api/v1/health")
 
@@ -226,3 +226,79 @@ async def test_health_extensibility_multiple_probes(async_client: AsyncClient) -
     assert "postgres" in body["checks"]
     assert "redis" in body["checks"]
     assert body["checks"]["redis"]["version"] == "7.2.0"
+
+
+async def test_rabbitmq_health_check_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    from mlops_labs.broker.probes import RabbitMQHealthCheck
+
+    mock_conn = MagicMock()
+    mock_conn.server_properties = {"version": "3.12.0"}
+    mock_conn.__aenter__.return_value = mock_conn
+    mock_conn.__aexit__.return_value = None
+
+    monkeypatch.setattr("aio_pika.connect", AsyncMock(return_value=mock_conn))
+
+    probe = RabbitMQHealthCheck(url="amqp://guest:guest@localhost:5672/")
+    assert isinstance(probe, HealthCheck)
+    result = await probe.check()
+
+    assert result.healthy is True
+    assert result.version == "3.12.0"
+    assert result.error is None
+    assert result.latency_ms >= 0
+
+
+async def test_rabbitmq_health_check_error_masks_credentials(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from mlops_labs.broker.probes import RabbitMQHealthCheck
+
+    monkeypatch.setattr(
+        "aio_pika.connect",
+        AsyncMock(
+            side_effect=ConnectionRefusedError(
+                "amqp://guest:secret_password@localhost:5672/ failed"
+            )
+        ),
+    )
+
+    probe = RabbitMQHealthCheck(url="amqp://guest:secret_password@localhost:5672/")
+    assert isinstance(probe, HealthCheck)
+    result = await probe.check()
+
+    assert result.healthy is False
+    assert result.version is None
+    assert result.error == "rabbitmq is unavailable"
+    assert "secret_password" not in (result.error or "")
+    assert "secret_password" not in caplog.text
+    records = [r for r in caplog.records if r.getMessage() == "dependency.unavailable"]
+    assert len(records) == 1
+    assert getattr(records[0], "error_type", None) == "ConnectionRefusedError"
+
+
+async def test_main_lifespan_initializes_health_checks(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    from mlops_labs import main
+    from mlops_labs.broker.probes import RabbitMQHealthCheck
+    from mlops_labs.db.probes import PostgresHealthCheck
+
+    engine = SimpleNamespace(dispose=AsyncMock())
+    monkeypatch.setattr(main, "create_db_engine", lambda _s: engine)
+    monkeypatch.setattr(main, "configure_logging", lambda _lvl: None)
+
+    app_instance = main.create_app()
+    assert app_instance.state.health_checks == []
+
+    async with main.lifespan(app_instance):
+        checks = app_instance.state.health_checks
+        assert len(checks) == 2
+        assert any(isinstance(c, PostgresHealthCheck) for c in checks)
+        assert any(isinstance(c, RabbitMQHealthCheck) for c in checks)
+
+        # Verify dependency reads from app.state
+        req = MagicMock()
+        req.app.state.health_checks = checks
+        assert get_health_checks(req) == checks
+
+    engine.dispose.assert_awaited_once()

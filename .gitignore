@@ -46,4 +46,9 @@ Thumbs.db
 .ipynb_checkpoints/
 data/raw/
 artifacts/
-reports/
+reports/*
+!reports/backpressure/
+reports/backpressure/*
+!reports/backpressure/*.csv
+!reports/backpressure/*.json
+!reports/backpressure/*.png
