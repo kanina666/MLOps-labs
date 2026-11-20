@@ -17,6 +17,7 @@ tests
 data/raw
 artifacts
 reports
+to_test
 .jupyter
 .ipython
 .matplotlib

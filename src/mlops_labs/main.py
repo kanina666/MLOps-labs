@@ -3,16 +3,17 @@ from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from time import perf_counter
 
-import mlflow.pyfunc
 from fastapi import FastAPI, Request, Response
+from faststream.rabbit import Channel, RabbitBroker
 
-from mlflow import MlflowClient
 from mlops_labs.api import router as api_router
 from mlops_labs.api.healthz import router as healthz_router
-from mlops_labs.api.v1.endpoints.process import router as process_router
+from mlops_labs.broker.probes import RabbitMQHealthCheck
+from mlops_labs.broker.topology import declare_topology
 from mlops_labs.core.config import get_settings
 from mlops_labs.core.logging import configure_logging
-from mlops_labs.db.base import create_db_engine
+from mlops_labs.db.base import create_db_engine, create_session_factory, init_db
+from mlops_labs.db.probes import PostgresHealthCheck
 
 logger = logging.getLogger(__name__)
 
@@ -22,49 +23,45 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     settings = get_settings()
     configure_logging(settings.log_level)
     engine = create_db_engine(settings)
+    if hasattr(engine, "begin"):
+        await init_db(engine)
+    session_factory = create_session_factory(engine)
     app.state.settings = settings
     app.state.engine = engine
+    app.state.session_factory = session_factory
 
-    mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
-    app.state.model_info = None
+    postgres_check = PostgresHealthCheck(engine=engine)
+    rabbitmq_check = RabbitMQHealthCheck(url=settings.rabbitmq_url)
+    app.state.health_checks = [postgres_check, rabbitmq_check]
+
+    broker = RabbitBroker(
+        url=settings.rabbitmq_url,
+        default_channel=Channel(on_return_raises=True),
+    )
+    app.state.broker = None
     try:
-        resolved_uri = settings.model_uri
-        model_version = None
-        run_id = None
-        if resolved_uri.startswith("models:/") and "@" in resolved_uri:
-            model_name, alias = resolved_uri.removeprefix("models:/").rsplit("@", 1)
-            version = MlflowClient().get_model_version_by_alias(model_name, alias)
-            model_version = version.version
-            run_id = version.run_id
-            resolved_uri = f"models:/{model_name}/{model_version}"
-        app.state.model = mlflow.pyfunc.load_model(resolved_uri)
-        app.state.model_info = {
-            "model_uri": resolved_uri,
-            "model_version": model_version,
-            "run_id": run_id,
-        }
-        logger.info("model.loaded", extra=app.state.model_info)
+        await broker.connect()
+        await declare_topology(broker, settings)
+        app.state.broker = broker
     except Exception as exc:
         logger.warning(
-            "model.load_failed",
-            extra={
-                "error_type": type(exc).__name__,
-                "error_code": getattr(exc, "error_code", None),
-                "model_uri": settings.model_uri,
-            },
+            "broker.connection_failed",
+            extra={"error_type": type(exc).__name__},
         )
-        app.state.model = None
 
     try:
         logger.info("app.started", extra={"version": settings.app_version})
         yield
     finally:
+        await broker.stop()
         await engine.dispose()
         logger.info("app.stopped")
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="MLOps Labs", lifespan=lifespan)
+    app.state.health_checks = []
+    app.state.broker = None
 
     @app.middleware("http")
     async def log_request(
@@ -97,7 +94,6 @@ def create_app() -> FastAPI:
 
     app.include_router(healthz_router)
     app.include_router(api_router)
-    app.include_router(process_router, tags=["inference"])
     return app
 
 

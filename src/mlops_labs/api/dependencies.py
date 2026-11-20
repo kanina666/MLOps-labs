@@ -1,13 +1,14 @@
-from typing import Annotated, Any
+from collections.abc import AsyncGenerator
+from typing import Annotated
 
-import pandas as pd
 from fastapi import Depends, HTTPException, Request, status
-from sqlalchemy.ext.asyncio import AsyncEngine
+from faststream.rabbit import RabbitBroker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from mlops_labs.api.schemas import ProcessRequest
-from mlops_labs.db.probes import PostgresHealthCheck
+from mlops_labs.core.config import Settings, get_settings
+from mlops_labs.db.base import create_session_factory
+from mlops_labs.db.task_repository import TaskRepository
 from mlops_labs.domain.system import HealthCheck
-from mlops_labs.features import make_features
 from mlops_labs.services.health import SystemHealthCheck
 
 
@@ -18,25 +19,44 @@ def get_db_engine(request: Request) -> AsyncEngine:
     return engine
 
 
-def get_health_checks(engine: Annotated[AsyncEngine, Depends(get_db_engine)]) -> list[HealthCheck]:
-    return [PostgresHealthCheck(engine=engine)]
+def get_session_factory(request: Request) -> async_sessionmaker[AsyncSession]:
+    factory = getattr(request.app.state, "session_factory", None)
+    if factory is None:
+        engine = get_db_engine(request)
+        factory = create_session_factory(engine)
+        request.app.state.session_factory = factory
+    return factory
+
+
+async def get_task_repository(
+    factory: Annotated[async_sessionmaker[AsyncSession], Depends(get_session_factory)],
+) -> AsyncGenerator[TaskRepository, None]:
+    async with factory() as session:
+        yield TaskRepository(session)
+
+
+def get_broker(
+    request: Request,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> RabbitBroker:
+    broker = getattr(request.app.state, "broker", None)
+    if not isinstance(broker, RabbitBroker):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Broker is not initialized or unavailable",
+            headers={"Retry-After": str(settings.effective_retry_after_seconds)},
+        )
+    return broker
+
+
+def get_health_checks(request: Request) -> list[HealthCheck]:
+    checks = getattr(request.app.state, "health_checks", None)
+    if checks is None:
+        return []
+    return list(checks)
 
 
 def get_system_health_check(
     checks: Annotated[list[HealthCheck], Depends(get_health_checks)],
 ) -> SystemHealthCheck:
     return SystemHealthCheck(checks=checks)
-
-
-def get_model(request: Request) -> Any:
-    model = getattr(request.app.state, "model", None)
-    if model is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Model is not loaded or unavailable",
-        )
-    return model
-
-
-def extract_features(payload: ProcessRequest) -> pd.DataFrame:
-    return pd.DataFrame([make_features(payload.recent_sales, payload.day_of_week, payload.is_snap)])
