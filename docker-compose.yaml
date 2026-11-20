@@ -1,3 +1,22 @@
+include:
+  - observability/compose.yaml
+
+x-telemetry-env: &telemetry-env
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  LOG_ENV: ${DEPLOYMENT_ENV:-dev}
+  OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-service.version=${APP_VERSION:-0.1.0},deployment.environment.name=${DEPLOYMENT_ENV:-dev}}
+  OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-false}
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
+  OTEL_EXPORTER_OTLP_TIMEOUT: ${OTEL_EXPORTER_OTLP_TIMEOUT:-0.5}
+  OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_always_on}
+  OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-}
+  OTEL_TRACES_EXPORTER: ${OTEL_TRACES_EXPORTER:-otlp}
+  OTEL_METRICS_EXPORTER: ${OTEL_METRICS_EXPORTER:-otlp}
+  OTEL_METRIC_EXPORT_INTERVAL: ${OTEL_METRIC_EXPORT_INTERVAL:-2000}
+  OTEL_METRIC_EXPORT_TIMEOUT: ${OTEL_METRIC_EXPORT_TIMEOUT:-1000}
+  OTEL_BSP_MAX_QUEUE_SIZE: ${OTEL_BSP_MAX_QUEUE_SIZE:-2048}
+  OTEL_BSP_SCHEDULE_DELAY: ${OTEL_BSP_SCHEDULE_DELAY:-1000}
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -33,7 +52,7 @@ services:
     restart: unless-stopped
 
   rabbitmq:
-    image: rabbitmq:3.13-management-alpine
+    image: rabbitmq:3.13.7-management-alpine
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
@@ -43,8 +62,9 @@ services:
       - "${RABBITMQ_PROM_PORT:-15692}:15692" # Prometheus
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
+      - ./observability/rabbitmq-enabled-plugins:/etc/rabbitmq/enabled_plugins:ro
     healthcheck:
-      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping"]
+      test: ["CMD", "su-exec", "rabbitmq", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -103,11 +123,11 @@ services:
         reservations:
           cpus: "0.25"
           memory: 128M
-    #no .env file yet, so we set environment variables directly in the docker-compose.yaml
     environment:
+      <<: *telemetry-env
+      OTEL_SERVICE_NAME: ${API_OTEL_SERVICE_NAME:-api}
       DATABASE_URL: "postgresql+asyncpg://postgres:postgres@postgres:5432/mlops_labs"
       RABBITMQ_URL: ${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672/}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
       MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
       MODEL_URI: ${MODEL_URI:-models:/m5_sales_model@champion}
       M5_DATA_DIR: /data/raw
@@ -158,9 +178,11 @@ services:
           cpus: "0.25"
           memory: 128M
     environment:
+      <<: *telemetry-env
+      OTEL_SERVICE_NAME: ${WORKER_OTEL_SERVICE_NAME:-worker}
+      MLFLOW_ENABLE_ARTIFACTS_PROGRESS_BAR: 'false'
       DATABASE_URL: "postgresql+asyncpg://postgres:postgres@postgres:5432/mlops_labs"
       RABBITMQ_URL: ${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672/}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
       MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
       MODEL_URI: ${MODEL_URI:-models:/m5_sales_model@champion}
       INFERENCE_DELAY_MS: ${INFERENCE_DELAY_MS:-200.0}
@@ -179,11 +201,14 @@ services:
     profiles: ["tools"]
     image: ${APP_IMAGE:-mlops-labs:local}
     pull_policy: never
+    read_only: true
     command: python -m mlops_labs.source --input /data/batch.jsonl
     depends_on:
       rabbitmq:
         condition: service_healthy
     environment:
+      <<: *telemetry-env
+      OTEL_SERVICE_NAME: ${SOURCE_OTEL_SERVICE_NAME:-source}
       RABBITMQ_URL: ${RABBITMQ_URL:-amqp://guest:guest@rabbitmq:5672/}
       RABBITMQ_QUEUE: ${RABBITMQ_QUEUE:-mlops.tasks}
       RABBITMQ_DLQ_QUEUE: ${RABBITMQ_DLQ_QUEUE:-mlops.tasks.dlq}
@@ -192,7 +217,7 @@ services:
       SOURCE_RETRY_DELAY_SECONDS: ${SOURCE_RETRY_DELAY_SECONDS:-0.05}
       SOURCE_RETRY_MAX_DELAY_SECONDS: ${SOURCE_RETRY_MAX_DELAY_SECONDS:-1.0}
     volumes:
-      - ${M5_DATA_ROOT:-../data}:/data:ro
+      - ${BATCH_DATA_ROOT:-./data}:/data:ro
     healthcheck:
       disable: true
     networks:
@@ -225,13 +250,13 @@ services:
 
   # Artifact Store: модели, файлы, графики -> S3-совместимое хранилище MinIO
   minio:
-    image: rustfs/rustfs:latest
+    image: rustfs/rustfs:1.0.0
     environment:
       RUSTFS_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       RUSTFS_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
     ports:
-      - "9100:9000"   # S3 API
-      - "9101:9001"   # веб-консоль
+      - "${MINIO_PORT:-9100}:9000"
+      - "${MINIO_CONSOLE_PORT:-9101}:9001"
     volumes:
       - minio_data:/data
     logging:
@@ -245,7 +270,7 @@ services:
 
   # Одноразовый контейнер: создаёт бакет для артефактов
   minio_init:
-    image: amazon/aws-cli:latest
+    image: amazon/aws-cli:2.27.49
     depends_on:
       minio:
         condition: service_started
@@ -269,7 +294,7 @@ services:
     build:
       context: ./mlflow
       dockerfile: Dockerfile
-    image: mlflow-server:local
+    image: ${MLFLOW_IMAGE:-mlflow-server:local}
     depends_on:
       mlflow_db:
         condition: service_healthy
@@ -288,7 +313,7 @@ services:
       --artifacts-destination s3://${MLFLOW_BUCKET:-mlflow}/
       --serve-artifacts
     ports:
-      - "5000:5000"
+      - "${MLFLOW_PORT:-5000}:5000"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health').read()\" || exit 1"]
       interval: 30s

@@ -284,8 +284,14 @@ async def test_main_lifespan_initializes_health_checks(monkeypatch: pytest.Monke
     from mlops_labs.db.probes import PostgresHealthCheck
 
     engine = SimpleNamespace(dispose=AsyncMock())
+    initialize = AsyncMock()
+    broker = MagicMock(connect=AsyncMock(), stop=AsyncMock())
     monkeypatch.setattr(main, "create_db_engine", lambda _s: engine)
-    monkeypatch.setattr(main, "configure_logging", lambda _lvl: None)
+    monkeypatch.setattr(main, "init_db", initialize)
+    monkeypatch.setattr(main, "RabbitBroker", lambda **_: broker)
+    monkeypatch.setattr(main, "declare_topology", AsyncMock())
+    monkeypatch.setattr(main, "configure_logging", lambda _lvl, _service: None)
+    monkeypatch.setattr(main, "start_telemetry", lambda *_: None)
 
     app_instance = main.create_app()
     assert app_instance.state.health_checks == []
@@ -301,4 +307,6 @@ async def test_main_lifespan_initializes_health_checks(monkeypatch: pytest.Monke
         req.app.state.health_checks = checks
         assert get_health_checks(req) == checks
 
+    initialize.assert_awaited_once_with(engine)
+    broker.stop.assert_awaited_once()
     engine.dispose.assert_awaited_once()

@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+  - name: pipeline
+    folder: Наблюдаемость
+    type: file
+    options:
+      path: /etc/grafana/dashboards

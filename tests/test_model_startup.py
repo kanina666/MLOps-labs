@@ -1,7 +1,7 @@
 import json
 import logging
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
 from httpx import ASGITransport, AsyncClient
@@ -105,7 +105,10 @@ async def test_missing_champion_keeps_healthz_available(monkeypatch, caplog) -> 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     await init_db(engine)
     monkeypatch.setattr(main, "create_db_engine", lambda _settings: engine)
-    monkeypatch.setattr(main, "configure_logging", lambda _level: None)
+    monkeypatch.setattr(main, "configure_logging", lambda _level, _service: None)
+    monkeypatch.setattr(main, "start_telemetry", lambda *_: None)
+    monkeypatch.setattr(main.RabbitBroker, "connect", AsyncMock(side_effect=ConnectionRefusedError))
+    monkeypatch.setattr(main.RabbitBroker, "stop", AsyncMock())
     app = main.create_app()
 
     async with main.lifespan(app):

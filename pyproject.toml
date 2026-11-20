@@ -53,6 +53,9 @@ web = [
     "pandas==2.3.3",
     "matplotlib==3.10.7",
     "faststream[rabbit]",
+    "opentelemetry-sdk>=1.45,<2",
+    "opentelemetry-exporter-otlp-proto-http>=1.45,<2",
+    "psutil>=5.9",
 ]
 
 [tool.uv]

@@ -1,0 +1,38 @@
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    uid: pipeline-prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      timeInterval: 2s
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: pipeline-tempo
+  - name: Loki
+    uid: pipeline-loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    jsonData:
+      derivedFields:
+        - name: trace_id
+          matcherRegex: '"trace_id"\s*:\s*"([a-f0-9]{32})"'
+          datasourceUid: pipeline-tempo
+          url: '$${__value.raw}'
+  - name: Tempo
+    uid: pipeline-tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200
+    jsonData:
+      tracesToLogsV2:
+        datasourceUid: pipeline-loki
+        spanStartTimeShift: '-2m'
+        spanEndTimeShift: '2m'
+        filterByTraceID: false
+        filterBySpanID: false
+        customQuery: true
+        query: '{service=~".+"} | json | trace_id = "$${__span.traceId}"'
