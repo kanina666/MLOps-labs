@@ -20,7 +20,7 @@ from mlops_labs.services.model import ModelPredictor, ModelUnavailableError
 
 @pytest.fixture(autouse=True)
 def _mock_logging(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(worker, "configure_logging", lambda _lvl, _service: None)
+    monkeypatch.setattr(worker, "configure_logging", lambda _lvl: None)
 
 
 @pytest.fixture
