@@ -1,0 +1,42 @@
+discovery.docker "pipeline" {
+  host = "unix:///var/run/docker.sock"
+  refresh_interval = "2s"
+  filter {
+    name   = "label"
+    values = ["com.docker.compose.project=" + sys.env("OBS_PROJECT")]
+  }
+}
+
+discovery.relabel "pipeline" {
+  targets = discovery.docker.pipeline.targets
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    regex         = "app|source|worker"
+    action        = "keep"
+  }
+}
+
+loki.source.docker "pipeline" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.pipeline.output
+  forward_to = [loki.process.pipeline.receiver]
+}
+
+loki.process "pipeline" {
+  stage.json {
+    expressions = { service = "", level = "", env = "" }
+  }
+  stage.labels {
+    values = { service = "", level = "", env = "" }
+  }
+  stage.label_keep {
+    values = ["service", "level", "env"]
+  }
+  forward_to = [loki.write.pipeline.receiver]
+}
+
+loki.write "pipeline" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

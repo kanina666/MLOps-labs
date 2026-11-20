@@ -4,7 +4,8 @@ import argparse
 import asyncio
 import hashlib
 import json
-import sys
+import logging
+import signal
 from collections.abc import Awaitable, Callable, Iterable, Iterator
 from contextlib import ExitStack
 from dataclasses import dataclass
@@ -18,9 +19,23 @@ from aio_pika.exceptions import AMQPError
 from faststream.rabbit import Channel, RabbitBroker
 
 from mlops_labs.api.schemas import ProcessRequest
-from mlops_labs.broker.publishing import publish_task
+from mlops_labs.broker.publishing import publish_failure, publish_task
 from mlops_labs.broker.topology import declare_topology
 from mlops_labs.core.config import Settings, get_settings
+from mlops_labs.core.logging import configure_logging
+from mlops_labs.core.telemetry import (
+    error_on_span,
+    source_nacks,
+    source_published,
+    source_retries,
+    source_wait,
+    start_telemetry,
+    stop_telemetry,
+    task_context,
+    tracer,
+)
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -43,14 +58,15 @@ def read_task_messages(
                 continue
             try:
                 payload = ProcessRequest.model_validate_json(line).model_dump()
-            except ValueError as exc:
-                raise ValueError(f"Invalid task at {path}:{line_number}: {exc}") from exc
+            except ValueError:
+                logger.exception("source.invalid_line", extra={"line_number": line_number})
+                raise ValueError(f"Invalid task at line {line_number}") from None
             task_id = str(uuid5(NAMESPACE_URL, f"mlops-batch:{batch_id}:{line_number}"))
             yield task_id, payload
 
 
 class StatsReporter:
-    def __init__(self, stream: TextIO, interval: float = 1.0) -> None:
+    def __init__(self, stream: TextIO | None, interval: float = 1.0) -> None:
         self.stream = stream
         self.interval = interval
         self.started = perf_counter()
@@ -73,8 +89,13 @@ class StatsReporter:
                 (stats.published_total - self.last_published) / window if window else 0.0
             ),
         }
-        self.stream.write(json.dumps(report) + "\n")
-        self.stream.flush()
+        if self.stream is not None:
+            self.stream.write(json.dumps(report) + "\n")
+            self.stream.flush()
+        logger.info(
+            "source.complete" if final else "source.progress",
+            extra={key: value for key, value in report.items() if key != "event"},
+        )
         self.last_report = now
         self.last_published = stats.published_total
 
@@ -86,41 +107,75 @@ async def publish_batch(
     *,
     reporter: StatsReporter | None = None,
     events_stream: TextIO | None = None,
+    batch_id: str | None = None,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> SourceStats:
     """Retry the current task without accumulating a backlog in memory"""
     stats = SourceStats()
     for task_id, payload in messages:
-        delay = min(settings.source_retry_delay_seconds, settings.source_retry_max_delay_seconds)
-        while True:
-            try:
-                await publish_task(broker, settings, task_id, payload)
-            except (AMQPError, OSError, TimeoutError):
-                stats.retries_total += 1
-                if reporter is not None:
-                    reporter(stats)
-                await sleep(delay)
-                delay = min(delay * 2, settings.source_retry_max_delay_seconds)
-            else:
-                stats.published_total += 1
-                if events_stream is not None:
-                    events_stream.write(
-                        json.dumps(
-                            {
-                                "event": "published",
-                                "task_id": task_id,
-                                "published_at": datetime.now(UTC).isoformat(),
-                            }
+        with (
+            task_context(task_id, batch_id),
+            tracer.start_as_current_span(
+                "source.task",
+                attributes={"task.id": task_id},
+                record_exception=False,
+                set_status_on_exception=False,
+            ),
+        ):
+            delay = min(
+                settings.source_retry_delay_seconds, settings.source_retry_max_delay_seconds
+            )
+            while True:
+                try:
+                    await publish_task(broker, settings, task_id, payload)
+                except (AMQPError, OSError, TimeoutError) as exc:
+                    stats.retries_total += 1
+                    source_retries.add(1)
+                    reason = publish_failure(exc)
+                    if reason == "nack":
+                        source_nacks.add(1)
+                    with tracer.start_as_current_span(
+                        "source.backoff",
+                        attributes={
+                            "retry.reason": reason,
+                            "retry.delay_seconds": delay,
+                        },
+                    ) as span:
+                        error_on_span(span, exc)
+                        logger.warning(
+                            "source.backoff", extra={"reason": reason, "delay_seconds": delay}
                         )
-                        + "\n"
-                    )
-                    events_stream.flush()
-                if reporter is not None:
-                    reporter(stats)
-                break
-    if reporter is not None:
-        reporter(stats, final=True)
-    return stats
+                        if reporter is not None:
+                            reporter(stats)
+                        started = perf_counter()
+                        try:
+                            await sleep(delay)
+                        finally:
+                            source_wait.add(perf_counter() - started)
+                    delay = min(delay * 2, settings.source_retry_max_delay_seconds)
+                else:
+                    stats.published_total += 1
+                    source_published.add(1)
+                    logger.info("source.published")
+                    if events_stream is not None:
+                        events_stream.write(
+                            json.dumps(
+                                {
+                                    "event": "published",
+                                    "task_id": task_id,
+                                    "published_at": datetime.now(UTC).isoformat(),
+                                }
+                            )
+                            + "\n"
+                        )
+                        events_stream.flush()
+                    if reporter is not None:
+                        reporter(stats)
+                    break
+    with task_context(None, batch_id):
+        if reporter is not None:
+            reporter(stats, final=True)
+        return stats
 
 
 async def run_source(
@@ -128,14 +183,30 @@ async def run_source(
     settings: Settings,
     *,
     batch_id: str | None = None,
-    stats_stream: TextIO = sys.stdout,
+    stats_stream: TextIO | None = None,
     events_stream: TextIO | None = None,
 ) -> SourceStats:
+    configure_logging(settings.log_level, "source")
+    providers = start_telemetry("source", settings)
     broker = RabbitBroker(
         settings.rabbitmq_url,
         default_channel=Channel(on_return_raises=True),
+        logger=logging.getLogger("mlops_labs.faststream.rabbit"),
     )
+    loop = asyncio.get_running_loop()
+    current = asyncio.current_task()
+    if current is not None and not hasattr(signal, "CTRL_BREAK_EVENT"):
+        loop.add_signal_handler(signal.SIGTERM, current.cancel)
     try:
+        if batch_id is None:
+            with path.open("rb") as stream:
+                batch_id = hashlib.file_digest(stream, "sha256").hexdigest()
+        with task_context(None, batch_id):
+            logger.info("source.started")
+        for counter in (source_published, source_nacks, source_retries, source_wait):
+            counter.add(0)
+        if providers is not None:
+            await asyncio.to_thread(providers[1].force_flush, timeout_millis=1000)
         await broker.connect()
         await declare_topology(broker, settings)
         return await publish_batch(
@@ -144,9 +215,18 @@ async def run_source(
             settings,
             reporter=StatsReporter(stats_stream),
             events_stream=events_stream,
+            batch_id=batch_id,
         )
+    except Exception:
+        logger.exception("source.failed")
+        raise
     finally:
+        logger.info("source.shutdown_started")
         await broker.stop()
+        await stop_telemetry(providers)
+        logger.info("source.stopped")
+        if current is not None and not hasattr(signal, "CTRL_BREAK_EVENT"):
+            loop.remove_signal_handler(signal.SIGTERM)
 
 
 def main() -> None:
@@ -158,7 +238,7 @@ def main() -> None:
     args = parser.parse_args()
     settings = get_settings()
     with ExitStack() as stack:
-        stats_stream = sys.stdout
+        stats_stream = None
         events_stream = None
         if args.stats_file is not None:
             args.stats_file.parent.mkdir(parents=True, exist_ok=True)
@@ -166,15 +246,20 @@ def main() -> None:
         if args.events_file is not None:
             args.events_file.parent.mkdir(parents=True, exist_ok=True)
             events_stream = stack.enter_context(args.events_file.open("w", encoding="utf-8"))
-        asyncio.run(
-            run_source(
-                args.input,
-                settings,
-                batch_id=args.batch_id,
-                stats_stream=stats_stream,
-                events_stream=events_stream,
+        try:
+            asyncio.run(
+                run_source(
+                    args.input,
+                    settings,
+                    batch_id=args.batch_id,
+                    stats_stream=stats_stream,
+                    events_stream=events_stream,
+                )
             )
-        )
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            raise SystemExit(1) from None
 
 
 if __name__ == "__main__":

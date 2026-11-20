@@ -347,6 +347,7 @@ async def test_linux_sigterm_drains_inflight_before_ack(
         )
         .with_env("MLFLOW_TRACKING_URI", "sqlite:////fixture/mlflow.db")
         .with_env("MLFLOW_REGISTRY_URI", "sqlite:////fixture/mlflow.db")
+        .with_env("MLFLOW_ENABLE_ARTIFACTS_PROGRESS_BAR", "false")
         .with_env("MODEL_URI", "models:/shutdown-model@champion")
         .with_env(
             "DATABASE_URL", f"postgresql+asyncpg://lab:lab@host.docker.internal:{db_port}/lab"
@@ -401,6 +402,23 @@ async def test_linux_sigterm_drains_inflight_before_ack(
             await queue.declare()
             assert queue.declaration_result.message_count == 0
         assert worker_container.get_wrapped_container().wait()["StatusCode"] == 0
+        records = [
+            json.loads(line)
+            for line in worker_container.get_wrapped_container().logs().splitlines()
+        ]
+        assert all(record["service"] == "worker" for record in records)
+        events = [
+            record["event"]
+            for record in records
+            if record.get("task_id") == task_id
+            or record["event"] in {"worker.shutdown_started", "worker.stopped"}
+        ]
+        assert events == [
+            "task.received",
+            "worker.shutdown_started",
+            "task.completed",
+            "worker.stopped",
+        ]
     finally:
         await broker.stop()
         await engine.dispose()

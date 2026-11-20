@@ -105,7 +105,7 @@ async def test_missing_champion_keeps_healthz_available(monkeypatch, caplog) -> 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     await init_db(engine)
     monkeypatch.setattr(main, "create_db_engine", lambda _settings: engine)
-    monkeypatch.setattr(main, "configure_logging", lambda _level: None)
+    monkeypatch.setattr(main, "configure_logging", lambda _level, _service: None)
     app = main.create_app()
 
     async with main.lifespan(app):

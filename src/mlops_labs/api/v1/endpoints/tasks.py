@@ -1,14 +1,16 @@
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from faststream.rabbit import RabbitBroker
+from opentelemetry.trace import get_current_span
 
 from mlops_labs.api.dependencies import get_broker, get_task_repository
 from mlops_labs.api.schemas import ProcessRequest, TaskResponse, TaskSubmitResponse
 from mlops_labs.api.v1.mappers import to_task_response_dto, to_task_submit_response_dto
-from mlops_labs.broker.publishing import publish_task
+from mlops_labs.broker.publishing import publish_failure, publish_task
 from mlops_labs.core.config import Settings, get_settings
+from mlops_labs.core.telemetry import error_on_span, task_context
 from mlops_labs.core.uuid7 import generate_uuid7_str
 from mlops_labs.db.task_repository import TaskRepository
 
@@ -19,33 +21,35 @@ router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 @router.post("", response_model=TaskSubmitResponse, status_code=status.HTTP_202_ACCEPTED)
 async def submit_task(
+    request: Request,
     payload: ProcessRequest,
     repo: Annotated[TaskRepository, Depends(get_task_repository)],
     broker: Annotated[RabbitBroker, Depends(get_broker)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> TaskSubmitResponse:
     task_id = generate_uuid7_str()
+    request.state.task_id = task_id
+    get_current_span().set_attribute("task.id", task_id)
     payload_dict = payload.model_dump()
 
-    try:
-        await publish_task(broker, settings, task_id, payload_dict)
-    except Exception as exc:
-        logger.warning(
-            "task.shed",
-            extra={
-                "task_id": task_id,
-                "error_type": type(exc).__name__,
-            },
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Service overloaded or queue is full",
-            headers={"Retry-After": str(settings.effective_retry_after_seconds)},
-        ) from exc
+    with task_context(task_id):
+        try:
+            await publish_task(broker, settings, task_id, payload_dict)
+        except Exception as exc:
+            error_on_span(get_current_span(), exc)
+            logger.warning(
+                "task.shed",
+                extra={"reason": publish_failure(exc), "error_type": type(exc).__name__},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Service overloaded or queue is full",
+                headers={"Retry-After": str(settings.effective_retry_after_seconds)},
+            ) from exc
 
-    # Preserve a result the worker may have saved before this insert
-    task = await repo.create_task(payload=payload_dict, task_id=task_id)
-    return to_task_submit_response_dto(task)
+        task = await repo.create_task(payload=payload_dict, task_id=task_id)
+        logger.info("task.accepted")
+        return to_task_submit_response_dto(task)
 
 
 @router.get("/{task_id}", response_model=TaskResponse, status_code=status.HTTP_200_OK)

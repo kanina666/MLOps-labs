@@ -8,6 +8,7 @@ class LoadedModel:
     model_version: str | None
     run_id: str | None
     model_uri: str
+    model_alias: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

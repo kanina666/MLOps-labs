@@ -1,18 +1,23 @@
 import asyncio
 import logging
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
+from time import perf_counter
 
 import mlflow.pyfunc
 import pandas as pd
 
 from mlflow import MlflowClient
 from mlops_labs.core.config import Settings, get_settings
+from mlops_labs.core.telemetry import error_on_span, inference_duration, tracer
 from mlops_labs.domain.model import LoadedModel, PredictionResult
 from mlops_labs.domain.tasks import TaskPayload
 from mlops_labs.features import make_features
 
 logger = logging.getLogger(__name__)
+REGISTRY_URI = re.compile(r"models:/[\w.-]+(?:(?:@|/)[\w.-]+)?")
 
 
 class ModelUnavailableError(RuntimeError):
@@ -44,7 +49,30 @@ class ModelPredictor:
             raise ModelUnavailableError("Model is not loaded or unavailable")
 
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._executor, self._predict_sync, payload)
+        return await loop.run_in_executor(
+            self._executor, copy_context().run, self._instrumented_predict, payload
+        )
+
+    def _instrumented_predict(self, payload: TaskPayload) -> PredictionResult:
+        model = self._loaded_model
+        assert model is not None  # noqa: S101
+        with tracer.start_as_current_span(
+            "inference",
+            attributes={
+                "model.alias": model.model_alias or "",
+                "model.version": model.model_version or "",
+            },
+            record_exception=False,
+            set_status_on_exception=False,
+        ) as span:
+            started = perf_counter()
+            try:
+                return self._predict_sync(payload)
+            except Exception as exc:
+                error_on_span(span, exc)
+                raise
+            finally:
+                inference_duration.record(perf_counter() - started)
 
     def _predict_sync(self, payload: TaskPayload) -> PredictionResult:
         if self._loaded_model is None:
@@ -97,14 +125,20 @@ def load_model(
         resolved_uri = target_uri
         model_version: str | None = None
         run_id: str | None = None
+        model_alias: str | None = None
 
         if resolved_uri.startswith("models:/") and "@" in resolved_uri:
             parsed_name, parsed_alias = resolved_uri.removeprefix("models:/").rsplit("@", 1)
+            model_alias = parsed_alias
             client = MlflowClient()
             version = client.get_model_version_by_alias(parsed_name, parsed_alias)
             model_version = str(version.version)
             run_id = version.run_id
             resolved_uri = f"models:/{parsed_name}/{model_version}"
+        elif resolved_uri.startswith("models:/"):
+            suffix = resolved_uri.rsplit("/", 1)[-1]
+            if suffix.isdecimal():
+                model_version = suffix
 
         loaded_pyfunc = mlflow.pyfunc.load_model(resolved_uri)
         loaded = LoadedModel(
@@ -112,11 +146,13 @@ def load_model(
             model_version=model_version,
             run_id=run_id,
             model_uri=resolved_uri,
+            model_alias=model_alias,
         )
         logger.info(
             "model.loaded",
             extra={
-                "model_uri": resolved_uri,
+                "model_uri": resolved_uri if REGISTRY_URI.fullmatch(resolved_uri) else None,
+                "model_alias": model_alias,
                 "model_version": model_version,
                 "run_id": run_id,
             },
@@ -128,7 +164,8 @@ def load_model(
             extra={
                 "error_type": type(exc).__name__,
                 "error_code": getattr(exc, "error_code", None),
-                "model_uri": target_uri,
+                "model_uri": target_uri if REGISTRY_URI.fullmatch(target_uri) else None,
+                "model_alias": model_alias,
             },
         )
         return None

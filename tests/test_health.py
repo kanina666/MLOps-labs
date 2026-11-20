@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncGenerator, Iterator
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -285,7 +286,7 @@ async def test_main_lifespan_initializes_health_checks(monkeypatch: pytest.Monke
 
     engine = SimpleNamespace(dispose=AsyncMock())
     monkeypatch.setattr(main, "create_db_engine", lambda _s: engine)
-    monkeypatch.setattr(main, "configure_logging", lambda _lvl: None)
+    monkeypatch.setattr(main, "configure_logging", lambda _lvl, _service: None)
 
     app_instance = main.create_app()
     assert app_instance.state.health_checks == []
@@ -302,3 +303,31 @@ async def test_main_lifespan_initializes_health_checks(monkeypatch: pytest.Monke
         assert get_health_checks(req) == checks
 
     engine.dispose.assert_awaited_once()
+
+
+async def test_main_recovers_after_broker_startup_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    from mlops_labs import main
+
+    broker = MagicMock()
+    broker.connect = AsyncMock(side_effect=[ConnectionRefusedError(), None])
+    broker.stop = AsyncMock()
+    topology_ready = asyncio.Event()
+
+    async def declare_topology(_broker: object, _settings: Settings) -> None:
+        topology_ready.set()
+
+    monkeypatch.setattr(main, "RabbitBroker", lambda **_: broker)
+    monkeypatch.setattr(main, "declare_topology", declare_topology)
+    monkeypatch.setattr(main, "create_db_engine", lambda _: SimpleNamespace(dispose=AsyncMock()))
+    monkeypatch.setattr(main, "configure_logging", lambda *_: None)
+
+    application = main.create_app()
+    async with main.lifespan(application):
+        assert application.state.broker is None
+        await asyncio.wait_for(topology_ready.wait(), timeout=5)
+        assert application.state.broker is broker
+
+    assert broker.connect.await_count == 2
+    broker.stop.assert_awaited_once()
