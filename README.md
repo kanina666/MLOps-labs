@@ -1,4 +1,4 @@
-# Практическая работа «Наблюдаемость»
+# Практическая работа Observability
 
 API и пакетный источник публикуют задачи в ограниченную очередь RabbitMQ. FastStream-воркер загружает модель из MLflow по alias `champion` и сохраняет результат в PostgreSQL. Дашборд «Конвейер» показывает состояние системы и позволяет перейти от лога задачи к её трейсу.
 
@@ -14,7 +14,7 @@ API и пакетный источник публикуют задачи в ог
 
 ## Чистый запуск
 
-Требуются Python 3.12, `uv` и Docker Compose с поддержкой `include` и `configs.content`. Команды для PowerShell выполняются из корня репозитория. `down -v` удаляет данные выбранного Compose-проекта, поэтому для защиты используется отдельное имя проекта.
+Требуются Python 3.12, `uv` и Docker Compose с поддержкой `include` и `configs.content`. Команды для PowerShell выполняются из корня репозитория. `down -v` удаляет данные выбранного Compose-проекта, поэтому используется отдельное имя проекта.
 
 ```powershell
 if (-not (Test-Path .env)) { Copy-Item .env.example .env }
@@ -60,44 +60,6 @@ docker compose --profile observability up -d --wait --wait-timeout 120
 Оценка рассчитана для одного API, одного источника, двух воркеров и двух очередей. Число рядов равно произведению числа значений лейблов, для гистограммы оно дополнительно умножается на число бакетов и рядов суммы и количества.
 
 Для одного API с 12 комбинациями `(method, route, status_code)` получается `12 × (1 счётчик + 9 конечных бакетов + +Inf + sum + count) = 156` рядов. Источник даёт 5 рядов, два воркера — `2 × (3 исхода + redelivery + in-flight + RSS + 12 рядов inference + 14 рядов времени задачи) = 64`. RSS API и две очереди добавляют 9 рядов. Итого для перечисленных метрик получается `156 + 5 + 64 + 9 = 234`, то есть около **240 рядов**. Это оценка выбранных метрик конвейера, а не всех рядов хранилища. Служебные метрики, дополнительные HTTP-комбинации и новые экземпляры увеличивают итоговое число. После пересоздания контейнеров старые ряды сохраняются до истечения retention. `task_id` добавил бы до 6000 рядов к одному счётчику или до `6000 × 12 = 72 000` к гистограмме inference.
-
-## Сценарии защиты
-
-Начните с одного воркера. Для короткого показа пакета установите `INFERENCE_DELAY_MS=35` до запуска стенда. При стандартных 200 мс пакет займёт больше времени.
-
-```powershell
-uv run --locked python scripts/demo_observability.py batch --tasks 6000
-docker compose run -d --name mlops-demo-source source `
-    python -m mlops_labs.source --input /data/batch.jsonl --batch-id demo-6000
-```
-
-Для нового прогона задайте новые `--name` и `--batch-id`. `published_total` в `source.progress` показывает число подтверждённых публикаций. Чтобы сверить число завершённых задач по пакету, используйте в Loki Explore диапазон, охватывающий весь прогон.
-
-```logql
-sum by (event) (count_over_time({service=~"source|worker"} | json | batch_id="demo-6000" | event=~"source.published|task.completed|task.dead_letter" [15m]))
-```
-
-1. **Нагрузка и масштабирование.** В Loki Explore найдите пакет запросом `{service="source"} | json | batch_id="demo-6000" | event=~"source.progress|source.complete"`. На дашборде покажите `ready`, `unacked`, лимит `x-max-length=10` и скорости. Через минуту устойчивой нагрузки выполните `docker compose --profile observability up -d --scale worker=2`. Сравните скорости до и после на устойчивых интервалах через `sum(rate(mlops_source_published_total[1m]))` и `sum by (instance) (rate(mlops_worker_tasks_total{outcome="ok"}[1m]))`.
-2. **Одна задача.** Возьмите `task_id` из PostgreSQL или из ответа `POST /api/v1/tasks`. В Loki выполните `{service=~"api|source|worker"} | json | task_id="<id>"`. Раскройте запись и нажмите **Tempo**, затем у спана — **Logs for this span**. `messaging.rabbitmq.queue_wait_seconds` оценивает время до доставки, включая сеть. Длительность inference показывает его спан. Exemplars связывают графики задержки с трейсами. За последние 15 минут ошибки видны по `{service=~"api|source|worker",level=~"ERROR|CRITICAL"}`.
-3. **Переполнение и `503`.** После опустошения очереди остановите воркеры командой `docker compose stop worker`. Запустите `uv run --locked python scripts/demo_observability.py api --requests 40 --concurrency 8`. При лимите 10 ожидаются 10 ответов `202` и 30 ответов `503`. Удерживайте очередь полной до `Firing`, затем запустите воркеры. Трейсы отказов находятся в Tempo по `{ span.http.response.status_code = 503 }`.
-4. **DLQ.** После дренирования очереди отправьте poison из блока ниже. Первая команда показывает три попытки и `task.dead_letter` в одном трейсе, вторая — немедленный DLQ для невалидного payload.
-5. **SIGTERM и отказ экспорта.** Под нагрузкой остановите воркер через `docker compose stop -t 45 worker`. Покажите `worker.shutdown_started`, `task.completed` и `worker.stopped`. По отдельности остановите `otel-collector` и `loki`. После каждой остановки отправьте валидную задачу, проверьте её статус `COMPLETED` через `GET /api/v1/tasks/{task_id}` и восстановите сервис.
-
-Для команды `poison` используются опубликованные порты RabbitMQ и Collector. Блок рассчитан на порты по умолчанию.
-
-```powershell
-$oldRabbit = $env:RABBITMQ_URL
-$oldOtlp = $env:OTEL_EXPORTER_OTLP_ENDPOINT
-try {
-    $env:RABBITMQ_URL = 'amqp://guest:guest@127.0.0.1:5672/'
-    $env:OTEL_EXPORTER_OTLP_ENDPOINT = 'http://127.0.0.1:4318'
-    uv run --locked python scripts/demo_observability.py poison
-    uv run --locked python scripts/demo_observability.py poison --malformed
-} finally {
-    $env:RABBITMQ_URL = $oldRabbit
-    $env:OTEL_EXPORTER_OTLP_ENDPOINT = $oldOtlp
-}
-```
 
 ## Алерты и бюджет памяти
 
