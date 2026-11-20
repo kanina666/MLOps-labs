@@ -2,27 +2,21 @@ import asyncio
 import os
 import socket
 import traceback
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import cache
-from typing import Any
-from urllib.parse import urlsplit
 
 import psutil  # type: ignore[import-untyped]
 from opentelemetry import metrics, trace
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import (
-    MetricExportResult,
-    MetricsData,
-    PeriodicExportingMetricReader,
-)
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.metrics.view import ExplicitBucketHistogramAggregation, View
 from opentelemetry.sdk.resources import OTELResourceDetector, Resource
-from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExportResult
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 from mlops_labs.core.config import Settings
 
@@ -71,32 +65,6 @@ def error_on_span(span: trace.Span, error: BaseException) -> None:
         )
 
 
-def endpoint_available(endpoint: str) -> bool:
-    try:
-        address = urlsplit(endpoint)
-        if address.hostname is None:
-            return False
-        return bool(socket.getaddrinfo(address.hostname, address.port, type=socket.SOCK_STREAM))
-    except (OSError, ValueError):
-        return False
-
-
-class TraceExporter(OTLPSpanExporter):
-    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
-        if not endpoint_available(self._endpoint):
-            return SpanExportResult.FAILURE
-        return super().export(spans)
-
-
-class MetricExporter(OTLPMetricExporter):
-    def export(
-        self, metrics_data: MetricsData, timeout_millis: float | None = 10_000, **kwargs: Any
-    ) -> MetricExportResult:
-        if not endpoint_available(self._endpoint):
-            return MetricExportResult.FAILURE
-        return super().export(metrics_data, timeout_millis=timeout_millis, **kwargs)
-
-
 @cache
 def configure_telemetry(
     service: str, app_version: str, inference_delay_ms: float
@@ -124,7 +92,7 @@ def configure_telemetry(
 
     traces = TracerProvider(resource=resource, shutdown_on_exit=False)
     if os.getenv("OTEL_TRACES_EXPORTER", "otlp") != "none":
-        traces.add_span_processor(BatchSpanProcessor(TraceExporter()))
+        traces.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
     trace.set_tracer_provider(traces)
 
     base = max(0.01, inference_delay_ms / 1000)
@@ -141,7 +109,7 @@ def configure_telemetry(
     ]
     readers = []
     if os.getenv("OTEL_METRICS_EXPORTER", "otlp") != "none":
-        readers.append(PeriodicExportingMetricReader(MetricExporter()))
+        readers.append(PeriodicExportingMetricReader(OTLPMetricExporter()))
     metric_provider = MeterProvider(
         resource=resource, metric_readers=readers, views=views, shutdown_on_exit=False
     )

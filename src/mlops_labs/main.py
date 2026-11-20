@@ -35,9 +35,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     settings = get_settings()
     configure_logging(settings.log_level, "api")
     providers = start_telemetry("api", settings)
+    for status_code in (202, 422, 500, 503):
+        api_requests.add(
+            0, {"method": "POST", "route": "/api/v1/tasks", "status_code": status_code}
+        )
     engine = create_db_engine(settings)
-    if hasattr(engine, "begin"):
-        await init_db(engine)
+    await init_db(engine)
     session_factory = create_session_factory(engine)
     app.state.settings = settings
     app.state.engine = engine

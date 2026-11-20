@@ -410,7 +410,7 @@
         {
           "refId": "A",
           "legendFormat": "Источник",
-          "expr": "sum(mlops_process_resident_memory_bytes{job=\"source\"} and (time() - timestamp(mlops_process_resident_memory_bytes{job=\"source\"}) < 6))",
+          "expr": "sum(mlops_process_resident_memory_bytes{job=\"source\"})",
           "datasource": {
             "type": "prometheus",
             "uid": "pipeline-prometheus"
@@ -421,7 +421,7 @@
         {
           "refId": "B",
           "legendFormat": "Воркеры · всего",
-          "expr": "sum(mlops_process_resident_memory_bytes{job=\"worker\"} and (time() - timestamp(mlops_process_resident_memory_bytes{job=\"worker\"}) < 6))",
+          "expr": "sum(mlops_process_resident_memory_bytes{job=\"worker\"})",
           "datasource": {
             "type": "prometheus",
             "uid": "pipeline-prometheus"
@@ -432,7 +432,7 @@
         {
           "refId": "C",
           "legendFormat": "Воркер {{instance}}",
-          "expr": "mlops_process_resident_memory_bytes{job=\"worker\",instance=~\"$worker\"} and (time() - timestamp(mlops_process_resident_memory_bytes{job=\"worker\"}) < 6)",
+          "expr": "mlops_process_resident_memory_bytes{job=\"worker\",instance=~\"$worker\"}",
           "datasource": {
             "type": "prometheus",
             "uid": "pipeline-prometheus"
@@ -460,6 +460,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "percentunit",
+          "max": 1,
           "custom": {
             "lineWidth": 2,
             "fillOpacity": 9,
@@ -618,7 +619,7 @@
         {
           "refId": "A",
           "legendFormat": "Воркер {{instance}}",
-          "expr": "mlops_worker_inflight{instance=~\"$worker\"} and (time() - timestamp(mlops_worker_inflight) < 6)",
+          "expr": "mlops_worker_inflight{instance=~\"$worker\"}",
           "datasource": {
             "type": "prometheus",
             "uid": "pipeline-prometheus"
@@ -719,6 +720,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "percentunit",
+          "max": 1,
           "custom": {
             "lineWidth": 2,
             "fillOpacity": 9,
@@ -742,7 +744,7 @@
         {
           "refId": "A",
           "legendFormat": "Успешные в пределах порога",
-          "expr": "(sum(increase(mlops_task_duration_seconds_bucket{le=\"$slo\"}[5m])) or 0 * sum(increase(mlops_worker_tasks_total{outcome=~\"ok|dlq\"}[5m]))) / (sum(increase(mlops_worker_tasks_total{outcome=~\"ok|dlq\"}[5m])) > 0)",
+          "expr": "(sum(increase(mlops_task_duration_seconds_bucket{le=\"$slo\"}[5m])) or vector(0)) / (((sum(increase(mlops_task_duration_seconds_count[5m])) or vector(0)) + (sum(increase(mlops_worker_tasks_total{outcome=\"dlq\"}[5m])) or vector(0))) > 0)",
           "datasource": {
             "type": "prometheus",
             "uid": "pipeline-prometheus"

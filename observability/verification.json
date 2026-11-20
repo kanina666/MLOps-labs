@@ -1,0 +1,316 @@
+{
+  "audit_date": "2026-11-20",
+  "project": "mlops-hw5-audit",
+  "workload": {
+    "batch_id": "hw5-audit-20261120",
+    "tasks": 6000,
+    "history_length": 4096,
+    "inference_delay_ms": 35,
+    "scenario": "Mixed load and fault tests, including worker stop/start; not a controlled scaling benchmark."
+  },
+  "memory": {
+    "source": "docker stats --no-stream --format {{json .}}",
+    "source_file": "memory-late-batch.jsonl",
+    "scope": "Six observability containers; application and infrastructure containers excluded.",
+    "measurement": "Single late-batch snapshot, not a continuously measured peak.",
+    "total_mib": 566.69,
+    "configured_limit_mib": 1440,
+    "docker_stats": [
+      {
+        "BlockIO": "0B / 737kB",
+        "CPUPerc": "3.27%",
+        "Container": "3c82292498e419b859a97197ee7c7dd59925349f8412272f0993ba36464cf8f9",
+        "ID": "3c82292498e4",
+        "MemPerc": "46.22%",
+        "MemUsage": "59.16MiB / 128MiB",
+        "Name": "mlops-hw5-audit-alloy-1",
+        "NetIO": "76.6kB / 2.64MB",
+        "PIDs": "18"
+      },
+      {
+        "BlockIO": "614kB / 528kB",
+        "CPUPerc": "1.93%",
+        "Container": "efffb9422ef081e17887e7b9a99f09fd5fb0d707382e47619f654dded1d72f7f",
+        "ID": "efffb9422ef0",
+        "MemPerc": "34.52%",
+        "MemUsage": "88.38MiB / 256MiB",
+        "Name": "mlops-hw5-audit-grafana-1",
+        "NetIO": "103kB / 69.1kB",
+        "PIDs": "19"
+      },
+      {
+        "BlockIO": "2.97MB / 496kB",
+        "CPUPerc": "2.59%",
+        "Container": "ddbc9686782448ac8d6b40478f6f61b62ec0e7a33386e2a578c1482c24e56efe",
+        "ID": "ddbc96867824",
+        "MemPerc": "27.64%",
+        "MemUsage": "70.76MiB / 256MiB",
+        "Name": "mlops-hw5-audit-loki-1",
+        "NetIO": "228kB / 5.88kB",
+        "PIDs": "17"
+      },
+      {
+        "BlockIO": "3.1MB / 0B",
+        "CPUPerc": "0.68%",
+        "Container": "4bc09afc0fd9e48c0afdbe7bcd570e4650f00b0a268bf254e9e35a9fa30a7adb",
+        "ID": "4bc09afc0fd9",
+        "MemPerc": "31.75%",
+        "MemUsage": "40.64MiB / 128MiB",
+        "Name": "mlops-hw5-audit-otel-collector-1",
+        "NetIO": "2.21MB / 511kB",
+        "PIDs": "17"
+      },
+      {
+        "BlockIO": "524kB / 1.73MB",
+        "CPUPerc": "2.18%",
+        "Container": "567841f99820b585033fc870d0ea14f9ad20b85c538d3cb0c79df79e4ef6e637",
+        "ID": "567841f99820",
+        "MemPerc": "16.66%",
+        "MemUsage": "42.65MiB / 256MiB",
+        "Name": "mlops-hw5-audit-prometheus-1",
+        "NetIO": "1MB / 362kB",
+        "PIDs": "17"
+      },
+      {
+        "BlockIO": "3.61MB / 10.8MB",
+        "CPUPerc": "2.73%",
+        "Container": "839ec0be5069baa6998a6330de32efcb2c2d2361dc77c08f75431c3e5a435620",
+        "ID": "839ec0be5069",
+        "MemPerc": "63.72%",
+        "MemUsage": "265.1MiB / 416MiB",
+        "Name": "mlops-hw5-audit-tempo-1",
+        "NetIO": "2.2MB / 155kB",
+        "PIDs": "17"
+      }
+    ]
+  },
+  "batch_database": {
+    "total": 6000,
+    "completed": 6000,
+    "min_attempts": 1,
+    "max_attempts": 1,
+    "unique_tasks": 6000
+  },
+  "controlled_scaling": {
+    "inference_delay_ms": 200,
+    "tasks": 1600,
+    "history_length": 28,
+    "rate_window_seconds": 60,
+    "one_worker": {
+      "queried_at": 1795188511.4325,
+      "source_rate": [
+        {
+          "metric": {},
+          "value": [
+            1795188513.612,
+            "4.256836210797711"
+          ]
+        }
+      ],
+      "worker_rate": [
+        {
+          "metric": {},
+          "value": [
+            1795188513.616,
+            "4.397992445801211"
+          ]
+        }
+      ],
+      "worker_instances": [
+        {
+          "metric": {
+            "instance": "4102a0ad0df7"
+          },
+          "value": [
+            1795188513.618,
+            "4.397992445801211"
+          ]
+        }
+      ],
+      "queue_ready": [
+        {
+          "metric": {
+            "__name__": "rabbitmq_detailed_queue_messages_ready",
+            "instance": "rabbitmq:15692",
+            "job": "rabbitmq",
+            "queue": "mlops.tasks",
+            "queue_role": "work",
+            "vhost": "/"
+          },
+          "value": [
+            1795188513.62,
+            "9"
+          ]
+        }
+      ],
+      "inference_p95": [
+        {
+          "metric": {},
+          "value": [
+            1795188513.622,
+            "0.21900000000000003"
+          ]
+        }
+      ]
+    },
+    "two_workers": {
+      "queried_at": 1795188626.9349153,
+      "source_rate": [
+        {
+          "metric": {},
+          "value": [
+            1795188629.049,
+            "8.573878250928837"
+          ]
+        }
+      ],
+      "worker_rate": [
+        {
+          "metric": {},
+          "value": [
+            1795188629.051,
+            "8.586577345225582"
+          ]
+        }
+      ],
+      "worker_instances": [
+        {
+          "metric": {
+            "instance": "4102a0ad0df7"
+          },
+          "value": [
+            1795188629.053,
+            "4.294139964819093"
+          ]
+        },
+        {
+          "metric": {
+            "instance": "cf1aa446fb48"
+          },
+          "value": [
+            1795188629.053,
+            "4.292437380406488"
+          ]
+        }
+      ],
+      "queue_ready": [
+        {
+          "metric": {
+            "__name__": "rabbitmq_detailed_queue_messages_ready",
+            "instance": "rabbitmq:15692",
+            "job": "rabbitmq",
+            "queue": "mlops.tasks",
+            "queue_role": "work",
+            "vhost": "/"
+          },
+          "value": [
+            1795188629.055,
+            "8"
+          ]
+        }
+      ],
+      "inference_p95": [
+        {
+          "metric": {},
+          "value": [
+            1795188629.056,
+            "0.21907661290322583"
+          ]
+        }
+      ]
+    },
+    "throughput_ratio": 1.9523856511902917,
+    "batch_id": "hw5-scaling-200ms-20261120",
+    "database": {
+      "total": 1600,
+      "unique_tasks": 1600,
+      "completed": 1600,
+      "min_attempts": 1,
+      "max_attempts": 1
+    },
+    "source_complete": {
+      "timestamp": "2026-11-20T15:31:16.435+00:00",
+      "level": "INFO",
+      "logger": "__main__",
+      "event": "source.complete",
+      "service": "source",
+      "env": "dev",
+      "published_total": 1600,
+      "retries_total": 2235,
+      "elapsed_seconds": 231.718545,
+      "source_rate": 6.904928568263416,
+      "window_source_rate": 0.0,
+      "batch_id": "hw5-scaling-200ms-20261120"
+    },
+    "source_container_state": {
+      "Status": "exited",
+      "Running": false,
+      "Paused": false,
+      "Restarting": false,
+      "OOMKilled": false,
+      "Dead": false,
+      "Pid": 0,
+      "ExitCode": 0,
+      "Error": "",
+      "StartedAt": "2026-11-20T15:27:23.3542733Z",
+      "FinishedAt": "2026-11-20T15:31:16.640375645Z"
+    }
+  },
+  "slo_regression": {
+    "testedAt": "2026-11-20T15:32:11.755Z",
+    "query": "(sum(increase(mlops_task_duration_seconds_bucket{le=\"3\"}[5m])) or vector(0)) / (((sum(increase(mlops_task_duration_seconds_count[5m])) or vector(0)) + (sum(increase(mlops_worker_tasks_total{outcome=\"dlq\"}[5m])) or vector(0))) > 0)",
+    "range": {
+      "start": "2026-11-20T12:32:11.000Z",
+      "end": "2026-11-20T15:32:11.000Z",
+      "stepSeconds": 5,
+      "samples": 192,
+      "min": 0.9151384712257599,
+      "max": 1,
+      "invalid": []
+    },
+    "previousPeak": {
+      "time": "2026-11-20T15:27:35.000Z",
+      "previous": 1.099998845075535,
+      "current": [
+        {
+          "metric": {},
+          "value": [
+            1795188455,
+            "1"
+          ]
+        }
+      ]
+    },
+    "provisionReloaded": true,
+    "panelText": "SLO · результаты быстрее 3 с\nУспешные в пределах порога\nЦель 99%",
+    "pageErrors": [],
+    "passed": true
+  },
+  "grafana_ui": {
+    "panels_rendered": 13,
+    "page_errors": [],
+    "log_to_trace_to_logs": {
+      "passed": true,
+      "logs_before": 4,
+      "trace_spans": 5,
+      "logs_after": 4,
+      "trace_id": "65b4a5183ad44e35835a3efedbdf248f"
+    },
+    "fresh_volume": {
+      "health": "healthy",
+      "restart_count": 0,
+      "datasources": 3,
+      "dashboard_panels": 13,
+      "wal_enabled": true
+    },
+    "exemplar_to_trace": {
+      "testedAt": "2026-11-20T15:38:09.307Z",
+      "method": "Actual headless Chrome UI clicks: dashboard inference latency exemplar -> Query with Tempo",
+      "markerCount": 357,
+      "traceId": "364467f1aed52f5b2c6494a536edbd6f",
+      "spanCount": 9,
+      "pageErrors": [],
+      "passed": true
+    }
+  }
+}
